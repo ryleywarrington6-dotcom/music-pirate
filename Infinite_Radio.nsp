@@ -1,11 +1,15 @@
 {
   "name": "Infinite Radio",
-  "comment": "Endless mix of liked and high-play tracks, excluding skipped ones",
+  "comment": "Endless mix of liked or high-play tracks, excluding skipped ones",
   "searchRules": {
-    "and": [
-      { "operator": "is", "field": "loved", "value": ["true"] },
-      { "operator": "gt", "field": "playCount", "value": ["3"] },
-      { "operator": "is", "field": "skipCount", "value": ["0"] }
+    "all": [
+      { "operator": "is", "field": "skipCount", "value": ["0"] },
+      {
+        "any": [
+          { "operator": "is", "field": "loved", "value": ["true"] },
+          { "operator": "gt", "field": "playCount", "value": ["3"] }
+        ]
+      }
     ]
   },
   "sort": "random",
