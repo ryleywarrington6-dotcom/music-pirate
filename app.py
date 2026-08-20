@@ -10,6 +10,7 @@ import time
 import urllib.request
 import urllib.parse
 import atexit
+import mimetypes
 from flask import Flask, request, session, redirect, url_for, render_template_string, jsonify, send_from_directory, Response, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -37,7 +38,7 @@ DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
 CACHE_DIR = os.path.join(DATA_DIR, "Cache_Art")
 PROFILES_DIR = os.path.join(DATA_DIR, "Profiles")
 DB_FILE = os.path.join(DATA_DIR, 'database.json')
-METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v11.json')
+METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v12.json')
 VIDEO_CACHE_FILE = os.path.join(DATA_DIR, 'videos_v2.json')
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -259,7 +260,7 @@ def generate_placeholder_cover(artist, title):
 
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 500 500">
         <rect width="500" height="500" fill="{bg_color}"/>
-        <text x="50%" y="55%" fill="{text_color}" font-size="180" font-family="Segoe UI, Arial, sans-serif"
+        <text x="50%" y="55%" fill="{text_color}" font-size="180" font-family="Outfit, Arial, sans-serif"
               font-weight="700" text-anchor="middle" dominant-baseline="middle" opacity="0.9">{initials}</text>
     </svg>'''
     return svg
@@ -307,27 +308,69 @@ LOGIN_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Streamer Pro - Login</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
-        :root { --bg: #050505; --panel: #121212; --accent: #1DB954; }
-        body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: white; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-        .auth-card { background: var(--panel); padding: 40px; border-radius: 12px; text-align: center; width: 340px; border: 1px solid #222; box-shadow: 0 15px 35px rgba(0,0,0,0.8); }
-        input { width: 100%; padding: 12px 16px; margin: 8px 0 16px 0; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: white; font-size: 14px; outline: none; box-sizing: border-box; }
-        input:focus { border-color: var(--accent); }
-        button { background: var(--accent); color: black; border: none; padding: 12px 24px; border-radius: 24px; font-weight: 700; cursor: pointer; width: 100%; font-size: 15px; margin-top: 10px; transition: 0.2s; }
-        button:hover { background: #1ed760; transform: scale(1.02); }
+        :root { --accent: #1DB954; }
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        body { 
+            font-family: 'Outfit', sans-serif; 
+            margin: 0; 
+            height: 100vh; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            background: linear-gradient(-45deg, #050505, #1a1a2e, #0a1913, #050505);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+            color: white; 
+        }
+        .auth-card { 
+            background: rgba(20, 20, 20, 0.4); 
+            backdrop-filter: blur(24px); 
+            -webkit-backdrop-filter: blur(24px);
+            padding: 45px 40px; 
+            border-radius: 20px; 
+            text-align: center; 
+            width: 360px; 
+            border: 1px solid rgba(255,255,255,0.05); 
+            box-shadow: 0 25px 50px rgba(0,0,0,0.6); 
+        }
+        h2 { margin-top:0; font-weight: 700; font-size: 28px; letter-spacing: -0.5px; }
+        .input-group { text-align: left; margin-bottom: 16px; }
+        .input-label { font-size: 13px; color: #a7a7a7; margin-bottom: 6px; font-weight: 500; text-transform: uppercase; letter-spacing: 1px; }
+        input { 
+            width: 100%; padding: 14px 16px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); 
+            background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; 
+            box-sizing: border-box; transition: all 0.3s ease; font-family: 'Outfit', sans-serif;
+        }
+        input:focus { border-color: var(--accent); background: rgba(0,0,0,0.5); box-shadow: 0 0 15px rgba(29, 185, 84, 0.15); }
+        button { 
+            background: var(--accent); color: black; border: none; padding: 14px 24px; border-radius: 30px; 
+            font-weight: 700; font-size: 16px; cursor: pointer; width: 100%; margin-top: 15px; 
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); font-family: 'Outfit', sans-serif;
+        }
+        button:hover { background: #1ed760; transform: translateY(-3px); box-shadow: 0 10px 20px rgba(29, 185, 84, 0.3); }
     </style>
 </head>
 <body>
     <div class="auth-card">
-        <h2 style="margin-top:0;">{{ 'Setup Master Admin' if setup else 'Log In' }}</h2>
+        <h2>{{ 'Setup Master Admin' if setup else 'Welcome Back' }}</h2>
         {% if error %}
-            <p style="color:#ff5555; font-size:13px; font-weight:600;">{{ error }}</p>
+            <p style="color:#ff5555; font-size:13px; font-weight:600; background: rgba(255,85,85,0.1); padding: 10px; border-radius: 8px;">{{ error }}</p>
         {% endif %}
         <form method="POST">
-            <div style="text-align: left; font-size: 13px; color: #a7a7a7;">Username</div>
-            <input type="text" name="username" required>
-            <div style="text-align: left; font-size: 13px; color: #a7a7a7;">Password</div>
-            <input type="password" name="password" required>
+            <div class="input-group">
+                <div class="input-label">Username</div>
+                <input type="text" name="username" required>
+            </div>
+            <div class="input-group">
+                <div class="input-label">Password</div>
+                <input type="password" name="password" required>
+            </div>
             <button type="submit">{{ 'Create Account' if setup else 'Log In' }}</button>
         </form>
     </div>
@@ -343,140 +386,160 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Streamer Pro</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
-        :root { --bg: {{ user_bg | default('#050505') }}; --panel: #121212; --highlight: #222222; --text: #ffffff; --subtext: #a7a7a7; --accent: #1DB954; --card-bg: #181818; }
+        :root { --bg: {{ user_bg | default('#080808') }}; --panel: rgba(18, 18, 18, 0.4); --highlight: rgba(255,255,255,0.1); --text: #ffffff; --subtext: #a7a7a7; --accent: #1DB954; --card-bg: rgba(24, 24, 24, 0.6); }
         * { box-sizing: border-box; }
-        body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: radial-gradient(circle at top left, #1a1a1a 0%, var(--bg) 100%); color: var(--text); margin: 0; overflow: hidden; display: flex; height: 100vh; }
-        .sidebar { width: 240px; background: transparent; padding: 24px 16px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; z-index: 10; }
-        .logo { font-size: 20px; font-weight: 800; padding: 0 12px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; letter-spacing: 0.5px; }
-        .nav-section-title { font-size: 11px; text-transform: uppercase; color: var(--subtext); letter-spacing: 1.2px; padding: 12px 12px 4px 12px; font-weight: 700; }
-        .nav-item { padding: 10px 12px; border-radius: 6px; cursor: pointer; color: var(--subtext); font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 15px; transition: all 0.2s ease; }
-        .nav-item:hover, .nav-item.active { color: var(--text); background: var(--highlight); }
-        .nav-item i { font-size: 18px; width: 20px; text-align: center; }
-        .center-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; position: relative; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
-        .top-bar { height: 64px; background: rgba(18,18,18,0.7); backdrop-filter: blur(20px); display: flex; align-items: center; justify-content: space-between; padding: 0 32px; position: absolute; top: 0; left: 0; right: 0; z-index: 50; border-radius: 12px 12px 0 0; }
-        .main-content { flex: 1; padding: 84px 32px 32px 32px; overflow-y: auto; scroll-behavior: smooth; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .fade-in { animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        body { font-family: 'Outfit', system-ui, sans-serif; background: radial-gradient(circle at top left, #1f1f2e 0%, var(--bg) 100%); color: var(--text); margin: 0; overflow: hidden; display: flex; height: 100vh; }
         
-        .right-panel { width: 340px; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; padding: 24px; display: none; flex-direction: column; text-align: center; overflow: hidden; transition: 0.3s; flex-shrink: 0; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
-        .rp-header-row { display: flex; justify-content: space-between; width: 100%; align-items: center; margin-bottom: 16px;}
-        .rp-tabs { display: flex; gap: 8px; background: #1a1a1a; padding: 4px; border-radius: 20px; }
-        .rp-tab { padding: 4px 12px; font-size: 11px; font-weight: 700; border-radius: 16px; cursor: pointer; color: var(--subtext); transition: 0.2s; }
-        .rp-tab.active { background: var(--highlight); color: var(--text); }
+        .sidebar { width: 250px; background: rgba(0,0,0,0.2); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); padding: 24px 16px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; z-index: 10; border-right: 1px solid rgba(255,255,255,0.05); }
+        .logo { font-size: 22px; font-weight: 800; padding: 0 12px; margin-bottom: 20px; display: flex; align-items: center; gap: 12px; letter-spacing: -0.5px; }
+        .nav-section-title { font-size: 11px; text-transform: uppercase; color: var(--subtext); letter-spacing: 1.5px; padding: 12px 12px 4px 12px; font-weight: 700; }
+        .nav-item { padding: 12px 14px; border-radius: 8px; cursor: pointer; color: var(--subtext); font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 16px; transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
+        .nav-item:hover, .nav-item.active { color: var(--text); background: var(--highlight); transform: translateX(4px); }
+        .nav-item i { font-size: 18px; width: 22px; text-align: center; }
         
-        .rp-media-container { position: relative; width: 220px; height: 220px; margin: 0 auto 25px auto; }
-        .rp-cover-glow { position: absolute; top: 10%; left: 10%; width: 80%; height: 80%; filter: blur(35px); opacity: 0.65; z-index: 1; transition: background-image 0.5s ease; background-size: cover; background-position: center; border-radius: 50%; }
-        #rp-cover { position: absolute; z-index: 2; top:0; left:0; width: 100%; height: 100%; border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.7); object-fit: cover; transition: opacity 0.5s ease; }
-        #rp-video-container { position: absolute; top:0; left:0; width:100%; height:100%; border-radius: 8px; overflow: hidden; z-index: 3; opacity: 0; transition: opacity 0.5s; pointer-events: none; box-shadow: 0 12px 30px rgba(0,0,0,0.7); }
+        .center-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; margin-bottom: 96px; }
+        .top-bar { height: 72px; background: rgba(10, 10, 10, 0.5); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); display: flex; align-items: center; justify-content: space-between; padding: 0 32px; position: absolute; top: 0; left: 0; right: 0; z-index: 50; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .main-content { flex: 1; padding: 100px 32px 32px 32px; overflow-y: auto; scroll-behavior: smooth; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-in { animation: fadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        
+        .right-panel { width: 360px; background: var(--panel); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border-radius: 16px; margin: 16px 16px 112px 0; padding: 24px; display: none; flex-direction: column; text-align: center; overflow: hidden; transition: 0.3s; flex-shrink: 0; border: 1px solid rgba(255,255,255,0.05); box-shadow: -10px 0 30px rgba(0,0,0,0.5); }
+        .rp-header-row { display: flex; justify-content: space-between; width: 100%; align-items: center; margin-bottom: 20px;}
+        .rp-tabs { display: flex; gap: 8px; background: rgba(0,0,0,0.3); padding: 5px; border-radius: 20px; }
+        .rp-tab { padding: 6px 14px; font-size: 12px; font-weight: 700; border-radius: 16px; cursor: pointer; color: var(--subtext); transition: 0.3s; }
+        .rp-tab.active { background: rgba(255,255,255,0.15); color: var(--text); box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
+        
+        .rp-media-container { position: relative; width: 240px; height: 240px; margin: 0 auto 30px auto; }
+        .rp-cover-glow { position: absolute; top: 10%; left: 10%; width: 80%; height: 80%; filter: blur(40px); opacity: 0.7; z-index: 1; transition: background-image 0.5s ease; background-size: cover; background-position: center; border-radius: 50%; }
+        #rp-cover { position: absolute; z-index: 2; top:0; left:0; width: 100%; height: 100%; border-radius: 12px; box-shadow: 0 15px 35px rgba(0,0,0,0.6); object-fit: cover; transition: opacity 0.5s ease; }
+        #rp-video-container { position: absolute; top:0; left:0; width:100%; height:100%; border-radius: 12px; overflow: hidden; z-index: 3; opacity: 0; transition: opacity 0.5s; pointer-events: none; box-shadow: 0 15px 35px rgba(0,0,0,0.6); }
         #rp-video { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 600px; height: 337px; }
 
-        #visualizer { width: 100%; height: 50px; display: block; filter: drop-shadow(0px 0px 8px rgba(29, 185, 84, 0.5)); margin-top: 5px; }
+        #visualizer { width: 100%; height: 60px; display: block; filter: drop-shadow(0px 0px 10px rgba(29, 185, 84, 0.4)); margin-top: 10px; }
 
         .queue-container { flex: 1; overflow-y: auto; text-align: left; padding-top: 10px; display: none; width: 100%; }
-        .queue-item { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 6px; cursor: pointer; transition: 0.2s; margin-bottom: 4px; }
-        .queue-item:hover { background: #282828; }
-        .queue-item img { width: 40px; height: 40px; border-radius: 4px; object-fit: cover; }
-        .queue-item-info { display: flex; flex-direction: column; overflow: hidden; flex: 1; }
+        .queue-item { display: flex; align-items: center; gap: 14px; padding: 12px; border-radius: 8px; cursor: pointer; transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1); margin-bottom: 6px; }
+        .queue-item:hover { background: rgba(255,255,255,0.08); transform: translateX(4px); }
+        .queue-item img { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
+        .queue-item-info { display: flex; flex-direction: column; overflow: hidden; flex: 1; gap: 2px; }
 
-        .player-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 88px; background: #000; border-top: 1px solid #222; display: flex; align-items: center; padding: 0 24px; justify-content: space-between; z-index: 1000; }
-        .search-container { display: flex; align-items: center; background: #242424; border-radius: 24px; padding: 8px 16px; width: 320px; border: 1px solid transparent; transition: 0.2s; }
-        .search-container:focus-within { border-color: #555; background: #2a2a2a; }
-        .search-container i { color: var(--subtext); font-size: 14px; margin-right: 10px; }
-        .search-container input { background: transparent; border: none; color: white; width: 100%; outline: none; font-size: 14px; }
+        .player-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 96px; background: rgba(10, 10, 10, 0.7); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); border-top: 1px solid rgba(255,255,255,0.05); display: flex; align-items: center; padding: 0 32px; justify-content: space-between; z-index: 1000; }
+        .search-container { display: flex; align-items: center; background: rgba(255,255,255,0.05); border-radius: 30px; padding: 10px 20px; width: 340px; border: 1px solid rgba(255,255,255,0.05); transition: 0.3s; }
+        .search-container:focus-within { border-color: var(--accent); background: rgba(255,255,255,0.1); box-shadow: 0 0 15px rgba(29, 185, 84, 0.1); }
+        .search-container i { color: var(--subtext); font-size: 16px; margin-right: 12px; }
+        .search-container input { background: transparent; border: none; color: white; width: 100%; outline: none; font-size: 15px; font-family: 'Outfit', sans-serif;}
+        
         .user-badge-wrapper { position: relative; display: inline-block; }
-        .user-badge { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; background: #1a1a1a; padding: 6px 14px; border-radius: 20px; border: 1px solid #333; cursor: pointer; transition: 0.2s; }
-        .user-badge:hover { background: #2a2a2a; border-color: #555; }
-        .settings-dropdown { display: none; position: absolute; right: 0; top: 48px; background: #282828; border-radius: 8px; width: 200px; box-shadow: 0 10px 25px rgba(0,0,0,0.7); z-index: 100; overflow: hidden; }
-        .settings-dropdown.show { display: block; }
-        .dropdown-item { padding: 12px 16px; font-size: 13px; font-weight: 600; color: var(--subtext); display: flex; align-items: center; gap: 12px; cursor: pointer; text-decoration: none; transition: 0.2s; }
-        .dropdown-item:hover { background: #333; color: var(--text); }
-        .dropdown-divider { height: 1px; background: #3d3d3d; margin: 4px 0; }
-        h2 { font-size: 26px; font-weight: 700; margin-top: 0; margin-bottom: 24px; letter-spacing: -0.5px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 20px; margin-bottom: 40px; }
-        .scroll-row { display: flex; gap: 20px; overflow-x: auto; padding-bottom: 16px; margin-bottom: 36px; scroll-snap-type: x mandatory; }
-        .scroll-row .card { min-width: 180px; flex-shrink: 0; scroll-snap-align: start; }
-        .card { background: var(--card-bg); padding: 14px; border-radius: 8px; cursor: pointer; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); position: relative; text-align: left; }
-        .card:hover { background: #252525; transform: translateY(-6px); box-shadow: 0 12px 30px rgba(0,0,0,0.6); }
-        .card-img-container { width: 100%; aspect-ratio: 1; background: #222; border-radius: 6px; margin-bottom: 12px; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 36px; color: #444; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
-        .card-img-container img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; }
-        .card-play-overlay { position: absolute; bottom: 10px; right: 10px; background: var(--accent); color: #000; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; opacity: 0; transform: translateY(10px); transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 8px 15px rgba(0,0,0,0.5); z-index: 2;}
+        .user-badge { display: flex; align-items: center; gap: 12px; font-size: 14px; font-weight: 700; background: rgba(0,0,0,0.3); padding: 8px 16px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.05); cursor: pointer; transition: 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
+        .user-badge:hover { background: rgba(255,255,255,0.1); transform: translateY(-2px); }
+        .settings-dropdown { display: none; position: absolute; right: 0; top: 55px; background: rgba(30,30,30,0.9); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; width: 220px; box-shadow: 0 15px 35px rgba(0,0,0,0.8); z-index: 100; overflow: hidden; padding: 8px 0; }
+        .settings-dropdown.show { display: block; animation: fadeIn 0.2s ease; }
+        .dropdown-item { padding: 12px 20px; font-size: 14px; font-weight: 600; color: var(--subtext); display: flex; align-items: center; gap: 14px; cursor: pointer; text-decoration: none; transition: 0.2s; }
+        .dropdown-item:hover { background: rgba(255,255,255,0.05); color: var(--text); }
+        .dropdown-divider { height: 1px; background: rgba(255,255,255,0.05); margin: 6px 0; }
+        
+        h2 { font-size: 32px; font-weight: 800; margin-top: 0; margin-bottom: 28px; letter-spacing: -1px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 24px; margin-bottom: 48px; }
+        .scroll-row { display: flex; gap: 24px; overflow-x: auto; padding-bottom: 20px; margin-bottom: 40px; scroll-snap-type: x mandatory; }
+        .scroll-row .card { min-width: 200px; flex-shrink: 0; scroll-snap-align: start; }
+        
+        .card { background: var(--card-bg); backdrop-filter: blur(10px); padding: 18px; border-radius: 12px; cursor: pointer; transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); position: relative; text-align: left; border: 1px solid rgba(255,255,255,0.03); }
+        .card:hover { background: rgba(40,40,40,0.8); transform: translateY(-8px); box-shadow: 0 20px 40px rgba(0,0,0,0.5); border-color: rgba(255,255,255,0.1); }
+        .card-img-container { width: 100%; aspect-ratio: 1; background: #222; border-radius: 8px; margin-bottom: 16px; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 40px; color: #444; box-shadow: 0 8px 20px rgba(0,0,0,0.4); }
+        .card-img-container img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; transition: transform 0.5s ease; }
+        .card:hover .card-img-container img { transform: scale(1.05); }
+        .card-play-overlay { position: absolute; bottom: 12px; right: 12px; background: var(--accent); color: #000; width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; opacity: 0; transform: translateY(15px); transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 10px 20px rgba(0,0,0,0.6); z-index: 2;}
         .card:hover .card-play-overlay { opacity: 1; transform: translateY(0); }
-        .card-play-overlay:hover { transform: scale(1.1) !important; background: #1ed760; }
-        .card-info { display: flex; flex-direction: column; gap: 4px; }
-        .card-title { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .card-play-overlay:hover { transform: scale(1.15) !important; background: #1ed760; }
+        .card-info { display: flex; flex-direction: column; gap: 6px; }
+        .card-title { font-weight: 800; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.2px; }
         .card-bottom-row { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
-        .card-artist { font-weight: 500; color: var(--subtext); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; padding-right: 8px; }
-        .card-stats { display: flex; gap: 8px; font-size: 11px; color: var(--subtext); }
-        .now-playing-info { width: 28%; display: flex; align-items: center; gap: 14px; }
-        .np-cover { width: 56px; height: 56px; background: #222; border-radius: 6px; object-fit: cover; box-shadow: 0 4px 12px rgba(0,0,0,0.5); cursor: pointer;}
-        .np-text { display: flex; flex-direction: column; overflow: hidden; }
-        .np-title { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .np-artist { color: var(--subtext); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
-        .controls { width: 44%; display: flex; flex-direction: column; align-items: center; gap: 6px; }
-        .buttons { display: flex; gap: 20px; align-items: center; }
-        .volume-controls { display: flex; align-items: center; gap: 12px; width: 28%; justify-content: flex-end; color: var(--subtext); }
+        .card-artist { font-weight: 500; color: var(--subtext); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; padding-right: 8px; }
+        
+        .now-playing-info { width: 30%; display: flex; align-items: center; gap: 16px; }
+        .np-cover { width: 64px; height: 64px; background: #222; border-radius: 8px; object-fit: cover; box-shadow: 0 8px 20px rgba(0,0,0,0.5); cursor: pointer; transition: transform 0.3s ease; }
+        .np-cover:hover { transform: scale(1.05); }
+        .np-text { display: flex; flex-direction: column; overflow: hidden; gap: 4px; }
+        .np-title { font-weight: 800; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.2px;}
+        .np-artist { color: var(--subtext); font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        
+        .controls { width: 40%; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+        .buttons { display: flex; gap: 24px; align-items: center; }
+        .volume-controls { display: flex; align-items: center; gap: 16px; width: 30%; justify-content: flex-end; color: var(--subtext); }
+        
         @keyframes pop { 0% { transform: scale(1); } 50% { transform: scale(1.35); } 100% { transform: scale(1); } }
         .pop-anim { animation: pop 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-        .btn { background: none; border: none; color: var(--subtext); font-size: 16px; cursor: pointer; transition: color 0.2s; outline: none; }
-        .btn:hover { color: var(--text); }
-        .btn.active#like-btn i, .btn.active.shuffle i, .btn.active.repeat i, .btn.active#sleep-btn i { color: var(--accent) !important; }
-        .btn.active#dislike-btn i { color: #ff5555 !important; }
-        .btn.play-btn { background: var(--text); color: var(--bg); height: 34px; width: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: transform 0.2s; }
-        .btn.play-btn:hover { transform: scale(1.08); color: var(--bg); }
-        audio { display: none; }
-        input[type=range] { -webkit-appearance: none; background: #4d4d4d; height: 4px; border-radius: 2px; outline: none; cursor: pointer; width: 100%; transition: 0.1s; }
-        input[type=range]:hover { height: 6px; }
-        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #fff; opacity: 0; transition: 0.1s; box-shadow: 0 2px 4px rgba(0,0,0,0.5); }
-        input[type=range]:hover::-webkit-slider-thumb { opacity: 1; }
-        .lyrics-container { position: relative; width: 100%; flex: 1; overflow-y: auto; text-align: left; padding-top: 20px; padding-bottom: 80px; scroll-behavior: smooth; mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); }
-        .lyric-line { font-size: 17px; color: rgba(255, 255, 255, 0.35); padding: 8px 12px; margin: 4px 0; border-radius: 6px; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); font-weight: 600; cursor: pointer; transform-origin: left center; }
-        .lyric-line:hover { color: rgba(255, 255, 255, 0.8); background: rgba(255,255,255,0.03); }
-        .lyric-line.active { color: var(--accent); font-size: 21px; font-weight: 700; text-shadow: 0 0 15px rgba(29, 185, 84, 0.4); transform: translateX(4px); opacity: 1; }
-        .lyric-word { transition: all 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275); display: inline-block; }
-        .lyric-word.active-word { color: #ff9500 !important; text-shadow: 0 0 18px rgba(255, 149, 0, 0.9) !important; transform: scale(1.15) translateY(-2px); }
-        .admin-card { background: #181818; border: 1px solid #282828; border-radius: 10px; padding: 24px; margin-bottom: 24px; max-width: 700px; }
-        .admin-table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14px; text-align: left; }
-        .admin-table th, .admin-table td { padding: 12px 14px; border-bottom: 1px solid #222; }
-        .admin-table th { color: var(--subtext); font-weight: 600; }
-        .badge-admin { background: rgba(29,185,84,0.15); color: var(--accent); padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
-        .badge-user { background: rgba(255,255,255,0.08); color: var(--subtext); padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-        .action-btn { background: #282828; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; transition: 0.2s; }
-        .action-btn:hover { background: #383838; }
-        .action-btn.danger { background: rgba(255,85,85,0.15); color: #ff5555; }
-        .action-btn.danger:hover { background: rgba(255,85,85,0.3); }
-        .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 2000; align-items: center; justify-content: center; backdrop-filter: blur(5px); }
-        .modal-card { background: #181818; border: 1px solid #333; padding: 30px; border-radius: 12px; width: 380px; box-shadow: 0 20px 40px rgba(0,0,0,0.8); text-align: center; }
-        .modal-card h3 { margin-top: 0; margin-bottom: 20px; }
-        .playlist-select-item { padding: 12px 16px; background: #222; border-radius: 6px; margin-bottom: 8px; cursor: pointer; font-weight: 600; text-align: left; display: flex; justify-content: space-between; align-items: center; transition: 0.2s; }
-        .playlist-select-item:hover { background: #2a2a2a; border-color: var(--accent); color: var(--accent); }
+        .btn { background: none; border: none; color: var(--subtext); font-size: 18px; cursor: pointer; transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1); outline: none; }
+        .btn:hover { color: var(--text); transform: scale(1.1); }
+        .btn.active#like-btn i, .btn.active.shuffle i, .btn.active.repeat i, .btn.active#sleep-btn i { color: var(--accent) !important; text-shadow: 0 0 10px rgba(29, 185, 84, 0.5); }
+        .btn.active#dislike-btn i { color: #ff5555 !important; text-shadow: 0 0 10px rgba(255, 85, 85, 0.5); }
+        .btn.play-btn { background: var(--text); color: black; height: 38px; width: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
+        .btn.play-btn:hover { transform: scale(1.1); background: var(--accent); }
         
-        .social-container { display: flex; height: calc(100vh - 120px); gap: 20px; }
-        .social-sidebar { width: 300px; background: #181818; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #282828; }
-        .social-sidebar-header { padding: 16px; border-bottom: 1px solid #282828; }
-        .social-list { flex: 1; overflow-y: auto; padding: 10px; }
-        .friend-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-radius: 8px; cursor: pointer; transition: 0.2s; margin-bottom: 4px; }
-        .friend-item:hover, .friend-item.active { background: #282828; }
-        .friend-item-info { display: flex; align-items: center; gap: 12px; }
-        .friend-pfp { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; background: #333; }
-        .chat-area { flex: 1; background: #181818; border-radius: 12px; display: flex; flex-direction: column; border: 1px solid #282828; overflow: hidden; }
-        .chat-header { padding: 16px 24px; border-bottom: 1px solid #282828; display: flex; align-items: center; gap: 12px; background: #1f1f1f; }
-        .chat-history { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
-        .chat-bubble { max-width: 70%; padding: 12px 16px; border-radius: 18px; font-size: 14px; line-height: 1.4; position: relative; }
-        .chat-bubble.sent { background: var(--accent); color: #000; align-self: flex-end; border-bottom-right-radius: 4px; }
-        .chat-bubble.received { background: #282828; color: #fff; align-self: flex-start; border-bottom-left-radius: 4px; }
-        .chat-time { font-size: 10px; opacity: 0.7; margin-top: 4px; text-align: right; }
-        .chat-input-area { padding: 16px; border-top: 1px solid #282828; display: flex; gap: 12px; background: #1f1f1f; }
-        .chat-input { flex: 1; padding: 12px 20px; border-radius: 24px; border: none; background: #282828; color: white; outline: none; }
-        .chat-send-btn { background: var(--accent); color: black; border: none; width: 44px; height: 44px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: 0.2s; }
-        .chat-send-btn:hover { transform: scale(1.05); }
+        audio { display: none; }
+        input[type=range] { -webkit-appearance: none; background: rgba(255,255,255,0.2); height: 6px; border-radius: 3px; outline: none; cursor: pointer; width: 100%; transition: 0.2s; }
+        input[type=range]:hover { height: 8px; background: rgba(255,255,255,0.3); }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #fff; opacity: 0; transition: 0.2s cubic-bezier(0.25, 0.8, 0.25, 1); box-shadow: 0 2px 5px rgba(0,0,0,0.5); }
+        input[type=range]:hover::-webkit-slider-thumb { opacity: 1; transform: scale(1.2); }
+        
+        .lyrics-container { position: relative; width: 100%; flex: 1; overflow-y: auto; text-align: left; padding-top: 20px; padding-bottom: 80px; scroll-behavior: smooth; mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); }
+        .lyric-line { font-size: 18px; color: rgba(255, 255, 255, 0.35); padding: 10px 14px; margin: 6px 0; border-radius: 8px; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); font-weight: 700; cursor: pointer; transform-origin: left center; }
+        .lyric-line:hover { color: rgba(255, 255, 255, 0.9); background: rgba(255,255,255,0.05); }
+        .lyric-line.active { color: var(--accent); font-size: 24px; font-weight: 800; text-shadow: 0 0 20px rgba(29, 185, 84, 0.5); transform: translateX(8px); opacity: 1; }
+        .lyric-word { transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275); display: inline-block; }
+        .lyric-word.active-word { color: #ff9500 !important; text-shadow: 0 0 20px rgba(255, 149, 0, 0.9) !important; transform: scale(1.15) translateY(-2px); }
+        
+        .admin-card { background: rgba(20,20,20,0.6); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.05); border-radius: 16px; padding: 30px; margin-bottom: 24px; max-width: 700px; box-shadow: 0 15px 35px rgba(0,0,0,0.3); }
+        .admin-table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 15px; text-align: left; }
+        .admin-table th, .admin-table td { padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .admin-table th { color: var(--subtext); font-weight: 700; text-transform: uppercase; font-size: 12px; letter-spacing: 1px; }
+        .badge-admin { background: rgba(29,185,84,0.15); color: var(--accent); padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 800; letter-spacing: 0.5px;}
+        .badge-user { background: rgba(255,255,255,0.1); color: var(--subtext); padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.5px;}
+        .action-btn { background: rgba(255,255,255,0.1); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 700; transition: all 0.3s ease; font-family: 'Outfit', sans-serif;}
+        .action-btn:hover { background: rgba(255,255,255,0.2); transform: translateY(-2px); }
+        .action-btn.danger { background: rgba(255,85,85,0.15); color: #ff5555; }
+        .action-btn.danger:hover { background: rgba(255,85,85,0.3); box-shadow: 0 5px 15px rgba(255,85,85,0.2); }
+        
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 2000; align-items: center; justify-content: center; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+        .modal-card { background: rgba(25,25,25,0.95); border: 1px solid rgba(255,255,255,0.1); padding: 35px; border-radius: 16px; width: 400px; box-shadow: 0 25px 50px rgba(0,0,0,0.8); text-align: center; }
+        .modal-card h3 { margin-top: 0; margin-bottom: 24px; font-size: 22px; font-weight: 800; }
+        .playlist-select-item { padding: 14px 18px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 10px; cursor: pointer; font-weight: 700; text-align: left; display: flex; justify-content: space-between; align-items: center; transition: 0.3s; border: 1px solid transparent;}
+        .playlist-select-item:hover { background: rgba(29, 185, 84, 0.1); border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
+        
+        .social-container { display: flex; height: calc(100vh - 140px); gap: 24px; }
+        .social-sidebar { width: 320px; background: rgba(20,20,20,0.6); backdrop-filter: blur(10px); border-radius: 16px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid rgba(255,255,255,0.05); }
+        .social-sidebar-header { padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .social-list { flex: 1; overflow-y: auto; padding: 12px; }
+        .friend-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-radius: 10px; cursor: pointer; transition: 0.3s ease; margin-bottom: 6px; border: 1px solid transparent;}
+        .friend-item:hover, .friend-item.active { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); }
+        .friend-item-info { display: flex; align-items: center; gap: 14px; }
+        .friend-pfp { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: #333; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
+        .chat-area { flex: 1; background: rgba(20,20,20,0.6); backdrop-filter: blur(10px); border-radius: 16px; display: flex; flex-direction: column; border: 1px solid rgba(255,255,255,0.05); overflow: hidden; }
+        .chat-header { padding: 20px 28px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; align-items: center; gap: 16px; background: rgba(0,0,0,0.2); }
+        .chat-history { flex: 1; padding: 28px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+        .chat-bubble { max-width: 75%; padding: 14px 18px; border-radius: 20px; font-size: 15px; font-weight: 500; line-height: 1.5; position: relative; box-shadow: 0 4px 15px rgba(0,0,0,0.2);}
+        .chat-bubble.sent { background: var(--accent); color: #000; align-self: flex-end; border-bottom-right-radius: 6px; }
+        .chat-bubble.received { background: rgba(255,255,255,0.1); color: #fff; align-self: flex-start; border-bottom-left-radius: 6px; border: 1px solid rgba(255,255,255,0.05);}
+        .chat-time { font-size: 11px; opacity: 0.7; margin-top: 6px; text-align: right; font-weight: 600;}
+        .chat-input-area { padding: 20px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; gap: 14px; background: rgba(0,0,0,0.2); }
+        .chat-input { flex: 1; padding: 14px 24px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; outline: none; font-size: 15px; font-family: 'Outfit', sans-serif;}
+        .chat-input:focus { border-color: var(--accent); background: rgba(0,0,0,0.5); }
+        .chat-send-btn { background: var(--accent); color: black; border: none; width: 50px; height: 50px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; transition: 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); box-shadow: 0 5px 15px rgba(29, 185, 84, 0.3); }
+        .chat-send-btn:hover { transform: scale(1.1); background: #1ed760; }
 
-        .eq-container { display: flex; align-items: flex-end; gap: 3px; height: 16px; }
-        .eq-bar { width: 3px; background: var(--accent); border-radius: 1px; animation: eqbounce 1s infinite ease-in-out; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+        
+        .eq-container { display: flex; align-items: flex-end; gap: 4px; height: 18px; }
+        .eq-bar { width: 4px; background: var(--accent); border-radius: 2px; animation: eqbounce 1s infinite ease-in-out; box-shadow: 0 0 8px rgba(29, 185, 84, 0.5);}
         .eq-bar:nth-child(1) { height: 40%; animation-delay: 0s; }
         .eq-bar:nth-child(2) { height: 70%; animation-delay: 0.2s; }
         .eq-bar:nth-child(3) { height: 50%; animation-delay: 0.4s; }
-        .eq-container.paused .eq-bar { animation-play-state: paused; height: 20% !important; transition: height 0.3s ease; }
+        .eq-container.paused .eq-bar { animation-play-state: paused; height: 20% !important; transition: height 0.3s ease; box-shadow: none;}
         @keyframes eqbounce { 0%, 100% { transform: scaleY(0.6); } 50% { transform: scaleY(1.0); } }
     </style>
 </head>
@@ -485,13 +548,13 @@ HTML_TEMPLATE = """
     <div class="modal-overlay" id="playlist-modal" onclick="if(event.target === this) closePlaylistModal()">
         <div class="modal-card">
             <h3>Add to Playlist</h3>
-            <div id="playlist-modal-list" style="max-height: 220px; overflow-y: auto; margin-bottom: 16px;"></div>
-            <button class="action-btn" style="width:100%; padding:10px; background:#333;" onclick="closePlaylistModal()">Cancel</button>
+            <div id="playlist-modal-list" style="max-height: 240px; overflow-y: auto; margin-bottom: 20px;"></div>
+            <button class="action-btn" style="width:100%; padding:12px; background:rgba(255,255,255,0.1); font-size:15px;" onclick="closePlaylistModal()">Cancel</button>
         </div>
     </div>
 
     <div class="sidebar">
-        <div class="logo"><i class="fab fa-spotify" style="color:var(--accent)"></i> Streamer Pro</div>
+        <div class="logo"><i class="fab fa-spotify" style="color:var(--accent); font-size: 26px;"></i> Streamer Pro</div>
         
         <div class="nav-section-title">Discover</div>
         <div class="nav-item active" onclick="switchView('home', this)"><i class="fas fa-home"></i> Home</div>
@@ -500,10 +563,10 @@ HTML_TEMPLATE = """
         <div class="nav-item" onclick="switchView('playlists', this)"><i class="fas fa-list-music"></i> Playlists</div>
         <div class="nav-item" onclick="switchView('radio', this)"><i class="fas fa-broadcast-tower"></i> Infinite Radio</div>
         
-        <div class="nav-section-title" style="margin-top: 16px;">Social</div>
+        <div class="nav-section-title" style="margin-top: 24px;">Social</div>
         <div class="nav-item" onclick="switchView('messages', this)"><i class="fas fa-comment-alt"></i> Messages</div>
 
-        <div class="nav-section-title" style="margin-top: 16px;">General</div>
+        <div class="nav-section-title" style="margin-top: 24px;">General</div>
         <div class="nav-item" onclick="switchView('settings', this)"><i class="fas fa-cog"></i> Settings</div>
     </div>
 
@@ -517,12 +580,12 @@ HTML_TEMPLATE = """
             <div class="user-badge-wrapper">
                 <div class="user-badge" onclick="toggleSettingsMenu()">
                     {% if user_pfp %}
-                        <img src="{{ user_pfp }}" style="width: 24px; height: 24px; border-radius: 50%; object-fit: cover;">
+                        <img src="{{ user_pfp }}" style="width: 28px; height: 28px; border-radius: 50%; object-fit: cover;">
                     {% else %}
-                        <i class="fas fa-user-circle" style="color: var(--accent); font-size:18px;"></i> 
+                        <i class="fas fa-user-circle" style="color: var(--accent); font-size:20px;"></i> 
                     {% endif %}
                     <span id="display-username">{{ session.user }}</span>
-                    <i class="fas fa-caret-down" style="font-size: 11px;"></i>
+                    <i class="fas fa-caret-down" style="font-size: 12px; margin-left: 4px;"></i>
                 </div>
                 <div class="settings-dropdown" id="settings-dropdown">
                     <div class="dropdown-item" onclick="switchView('settings'); toggleSettingsMenu();"><i class="fas fa-sliders-h"></i> Settings</div>
@@ -556,17 +619,17 @@ HTML_TEMPLATE = """
                     <div id="rp-video"></div>
                 </div>
             </div>
-            <div id="rp-title" style="font-size: 20px; font-weight: 700; margin-bottom: 4px; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></div>
-            <div id="rp-artist" style="color: var(--subtext); font-weight: 500; font-size: 14px; margin-bottom: 10px; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></div>
+            <div id="rp-title" style="font-size: 22px; font-weight: 800; margin-bottom: 6px; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.5px;"></div>
+            <div id="rp-artist" style="color: var(--subtext); font-weight: 600; font-size: 15px; margin-bottom: 12px; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></div>
             <canvas id="visualizer" width="600" height="100"></canvas>
         </div>
 
         <div class="lyrics-container" id="rp-view-lyrics" style="display:none;">
-            <div style="color:#555; text-align:center; padding-top:40px;">Select a track to load live lyrics.</div>
+            <div style="color:rgba(255,255,255,0.4); text-align:center; padding-top:60px; font-weight: 600;">Select a track to load live lyrics.</div>
         </div>
 
         <div class="queue-container" id="rp-view-queue">
-            <div style="color:#555; text-align:center; padding-top:40px;">Queue is empty.</div>
+            <div style="color:rgba(255,255,255,0.4); text-align:center; padding-top:60px; font-weight: 600;">Queue is empty.</div>
         </div>
     </div>
 
@@ -590,7 +653,7 @@ HTML_TEMPLATE = """
                 <button class="btn" id="repeat-btn" onclick="toggleRepeat()" title="Repeat"><i class="fas fa-redo"></i></button>
                 <button class="btn" id="sleep-btn" onclick="toggleSleepTimer()" title="Set Sleep Timer"><i class="fas fa-moon"></i></button>
             </div>
-            <div style="width: 100%; display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--subtext); font-weight:500;">
+            <div style="width: 100%; display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--subtext); font-weight:600;">
                 <span id="time-current">0:00</span>
                 <input type="range" id="progress-bar" value="0" max="100">
                 <span id="time-total">0:00</span>
@@ -599,15 +662,15 @@ HTML_TEMPLATE = """
         </div>
         
         <div class="volume-controls">
-            <a id="download-btn" href="#" download style="color:var(--subtext); margin-right:15px; display:none; font-size: 14px;" title="Download Track"><i class="fas fa-download"></i></a>
+            <a id="download-btn" href="#" download style="color:var(--subtext); margin-right:20px; display:none; font-size: 16px; transition: 0.2s;" title="Download Track"><i class="fas fa-download"></i></a>
             <button class="btn" id="dislike-btn" onclick="sendFeedback('dislike')" title="Dislike"><i class="fas fa-thumbs-down"></i></button>
-            <button class="btn" id="like-btn" onclick="sendFeedback('like')" style="margin-right:10px;" title="Like"><i class="fas fa-heart"></i></button>
+            <button class="btn" id="like-btn" onclick="sendFeedback('like')" style="margin-right:15px;" title="Like"><i class="fas fa-heart"></i></button>
             
-            <i class="fas fa-wave-square" title="Bass Boost" style="cursor:pointer; width:16px;"></i>
-            <input type="range" id="bass-bar" value="0" max="20" style="width: 60px; margin-right: 10px;" title="Bass Boost">
+            <i class="fas fa-wave-square" title="Bass Boost" style="cursor:pointer; width:18px; font-size: 14px;"></i>
+            <input type="range" id="bass-bar" value="0" max="20" style="width: 70px; margin-right: 15px;" title="Bass Boost">
             
-            <i class="fas fa-volume-up" id="mute-icon" onclick="toggleMute()" style="cursor:pointer; width:16px;"></i>
-            <input type="range" id="volume-bar" value="100" max="100" style="width: 90px;" title="Volume (Up/Down Arrows)">
+            <i class="fas fa-volume-up" id="mute-icon" onclick="toggleMute()" style="cursor:pointer; width:18px; font-size: 14px;"></i>
+            <input type="range" id="volume-bar" value="100" max="100" style="width: 100px;" title="Volume (Up/Down Arrows)">
         </div>
     </div>
 
@@ -688,7 +751,7 @@ HTML_TEMPLATE = """
         function renderQueue() {
             let html = '';
             if (currentQueue.length === 0 || currentIndex >= currentQueue.length - 1) {
-                html = '<div style="color:#555; text-align:center; padding-top:40px;">Queue is empty.</div>';
+                html = '<div style="color:rgba(255,255,255,0.4); text-align:center; padding-top:60px; font-weight:600;">Queue is empty.</div>';
             } else {
                 for (let i = currentIndex + 1; i < currentQueue.length; i++) {
                     let song = currentQueue[i];
@@ -698,8 +761,8 @@ HTML_TEMPLATE = """
                     <div class="queue-item" onclick="playQueue(currentQueue, ${i})">
                         <img src="${getCoverUrl(song)}" loading="lazy">
                         <div class="queue-item-info">
-                            <div style="font-weight:700; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${cleanTitle}</div>
-                            <div style="font-size:11px; color:var(--subtext); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${cleanArtist}</div>
+                            <div style="font-weight:800; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${cleanTitle}</div>
+                            <div style="font-size:12px; font-weight:500; color:var(--subtext); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${cleanArtist}</div>
                         </div>
                     </div>`;
                 }
@@ -810,7 +873,7 @@ HTML_TEMPLATE = """
                     let barHeight = mathVal * visualizerCanvas.height;
 
                     let gradient = canvasCtx.createLinearGradient(0, visualizerCanvas.height, 0, 0);
-                    gradient.addColorStop(0, "rgba(29, 185, 84, 0.4)");
+                    gradient.addColorStop(0, "rgba(29, 185, 84, 0.5)");
                     gradient.addColorStop(1, "rgba(29, 185, 84, 1)");
 
                     canvasCtx.fillStyle = gradient;
@@ -829,7 +892,7 @@ HTML_TEMPLATE = """
 
         function updateSliderFill(el) {
             const val = (el.value - el.min) / (el.max - el.min) * 100;
-            el.style.background = `linear-gradient(to right, var(--accent) ${val}%, #4d4d4d ${val}%)`;
+            el.style.background = `linear-gradient(to right, var(--accent) ${val}%, rgba(255,255,255,0.2) ${val}%)`;
         }
 
         function toggleSettingsMenu() {
@@ -861,6 +924,15 @@ HTML_TEMPLATE = """
                 navigator.mediaSession.setActionHandler('pause', () => { audio.pause(); });
                 navigator.mediaSession.setActionHandler('previoustrack', prevTrack);
                 navigator.mediaSession.setActionHandler('nexttrack', nextTrack);
+            }
+        }
+
+        function animateButton(id) {
+            const el = document.getElementById(id);
+            if(el) {
+                el.classList.remove('pop-anim');
+                void el.offsetWidth;
+                el.classList.add('pop-anim');
             }
         }
 
@@ -1077,6 +1149,15 @@ HTML_TEMPLATE = """
             renderGrid(results, `Search Results for "${query}"`);
         }
 
+        function playQueue(queue, index) {
+            if (queue.length === 0) return;
+            currentQueue = queue;
+            if (!isShuffle) originalQueue = [...queue];
+            currentIndex = index;
+            isRadioMode = false;
+            loadTrack(currentQueue[currentIndex]);
+        }
+
         function playQueueByFilenames(filenames, index) {
             let queue = filenames.map(f => allSongs.find(s => s.filename === f)).filter(Boolean);
             playQueue(queue, index);
@@ -1086,6 +1167,192 @@ HTML_TEMPLATE = """
             let songIndex = allSongs.findIndex(s => s.filename === filename);
             if(songIndex !== -1) {
                 playQueue(allSongs, songIndex);
+            }
+        }
+
+        function startRadio() {
+            isRadioMode = true;
+            radioHistory = [];
+            currentQueue = [];
+            document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
+            document.querySelectorAll('.nav-item')[5].classList.add('active');
+            nextTrack();
+        }
+
+        function loadTrack(songObj) {
+            if (!songObj) return;
+            currentSongObj = songObj;
+            
+            let fileUrl = `/play/${encodeURIComponent(songObj.filename)}`;
+            audio.src = fileUrl;
+            
+            document.getElementById('np-title').innerText = songObj.title;
+            document.getElementById('np-artist').innerText = songObj.artist;
+            document.getElementById('rp-title').innerText = songObj.title;
+            document.getElementById('rp-artist').innerText = songObj.artist;
+            
+            let coverUrl = getCoverUrl(songObj);
+            document.getElementById('np-cover').src = coverUrl;
+            document.getElementById('rp-cover').src = coverUrl;
+            document.getElementById('rp-cover-glow').style.backgroundImage = `url("${coverUrl}")`;
+            
+            document.getElementById('download-btn').href = `/download/${encodeURIComponent(songObj.filename)}`;
+            document.getElementById('download-btn').style.display = 'inline-block';
+            
+            updateMediaSession(songObj, coverUrl);
+            fetchStatusAndLog(songObj.filename);
+            
+            audio.play();
+            renderQueue();
+            
+            document.getElementById('rp-video-container').style.opacity = '0';
+            fetch(`/api/video?artist=${encodeURIComponent(songObj.artist)}&song=${encodeURIComponent(songObj.title)}`)
+                .then(res => res.json())
+                .then(data => {
+                    if(data.youtube_id && ytPlayerReady) {
+                        if(!ytPlayer) {
+                            ytPlayer = new YT.Player('rp-video', {
+                                videoId: data.youtube_id,
+                                playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0, 'modestbranding': 1, 'rel': 0, 'showinfo': 0, 'mute': 1 },
+                                events: {
+                                    'onReady': (e) => { e.target.playVideo(); document.getElementById('rp-video-container').style.opacity = '1'; }
+                                }
+                            });
+                        } else {
+                            ytPlayer.loadVideoById(data.youtube_id);
+                            document.getElementById('rp-video-container').style.opacity = '1';
+                        }
+                    } else if (ytPlayer) {
+                        ytPlayer.stopVideo();
+                        document.getElementById('rp-video-container').style.opacity = '0';
+                    }
+                });
+
+            lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;"><i class="fas fa-spinner fa-spin"></i> Searching for lyrics...</div>';
+            syncedLyrics = [];
+            activeLyricIndex = -1;
+            
+            let query = `${songObj.artist} ${songObj.title}`.toLowerCase();
+            let cleanQuery = query.replace(/\s*\(feat\..*?\)/g, '').replace(/\s*ft\..*$/g, '').replace(/[^a-z0-9 ]/g, '');
+            
+            fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(cleanQuery)}`)
+                .then(r => r.json())
+                .then(results => {
+                    if (results && results.length > 0) {
+                        let bestMatch = results.find(r => r.syncedLyrics);
+                        if (bestMatch && bestMatch.syncedLyrics) {
+                            let parsed = parseLrc(bestMatch.syncedLyrics);
+                            syncedLyrics = parsed;
+                            renderLyrics(parsed);
+                        } else if (bestMatch && bestMatch.plainLyrics) {
+                            renderPlainLyrics(bestMatch.plainLyrics);
+                        } else {
+                            lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">No lyrics found for this track.</div>';
+                        }
+                    } else {
+                        lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">No lyrics found for this track.</div>';
+                    }
+                }).catch(() => {
+                    lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">Failed to load lyrics.</div>';
+                });
+        }
+
+        function parseLrc(lrcString) {
+            const lines = lrcString.split('\\n');
+            const parsed = [];
+            const timeRegex = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const match = timeRegex.exec(line);
+                if (match) {
+                    const minutes = parseInt(match[1], 10);
+                    const seconds = parseInt(match[2], 10);
+                    const milliseconds = parseInt(match[3].padEnd(3, '0'), 10);
+                    const timeInSeconds = (minutes * 60) + seconds + (milliseconds / 1000);
+                    
+                    const text = line.replace(timeRegex, '').trim();
+                    if(text) {
+                        const words = text.split(' ');
+                        const wordTimings = [];
+                        let accum = 0;
+                        for(let w=0; w<words.length; w++) {
+                            const chunk = 1 / words.length;
+                            wordTimings.push({ word: words[w], startPercent: accum, endPercent: accum + chunk });
+                            accum += chunk;
+                        }
+                        
+                        parsed.push({ time: timeInSeconds, text: text, words: words, wordTimings: wordTimings, duration: 3.0 });
+                    }
+                }
+            }
+            
+            for(let i=0; i<parsed.length - 1; i++) {
+                parsed[i].duration = parsed[i+1].time - parsed[i].time;
+                if(parsed[i].duration <= 0 || parsed[i].duration > 10) parsed[i].duration = 3.0;
+            }
+            
+            return parsed;
+        }
+
+        function renderLyrics(parsedLines) {
+            let html = '<div style="height: 50%;"></div>';
+            parsedLines.forEach((line, index) => {
+                let wordsHtml = line.wordTimings.map(wt => `<span class="lyric-word">${wt.word}</span>`).join(' ');
+                html += `<div class="lyric-line" id="lyric-${index}" onclick="seekTo(${line.time})">${wordsHtml}</div>`;
+            });
+            html += '<div style="height: 50%;"></div>';
+            lyricsContainer.innerHTML = html;
+        }
+
+        function renderPlainLyrics(text) {
+            let html = '<div style="height: 20px;"></div>';
+            text.split('\\n').forEach(line => {
+                if(line.trim()) html += `<div class="lyric-line" style="cursor:default;">${line.replace(/</g, '&lt;')}</div>`;
+                else html += `<br>`;
+            });
+            html += '<div style="height: 50px;"></div>';
+            lyricsContainer.innerHTML = html;
+        }
+
+        function seekTo(timeSeconds) {
+            if(!audio.duration) return;
+            audio.currentTime = timeSeconds;
+            if(ytPlayer && typeof ytPlayer.seekTo === 'function') ytPlayer.seekTo(timeSeconds, true);
+        }
+
+        function nextTrack() {
+            if (isRadioMode) {
+                if (currentSongObj) radioHistory.push(currentSongObj.filename);
+                if (radioHistory.length > 20) radioHistory.shift();
+                
+                let histParam = radioHistory.map(encodeURIComponent).join(',');
+                fetch('/api/radio/next?history=' + histParam)
+                    .then(res => res.json())
+                    .then(data => { if(data.song) loadTrack(data.song); });
+            } else {
+                if (currentQueue.length === 0) return;
+                currentIndex++;
+                if (currentIndex >= currentQueue.length) {
+                    currentIndex = 0;
+                    if (!isRepeat) {
+                        audio.pause();
+                        renderQueue();
+                        return;
+                    }
+                }
+                loadTrack(currentQueue[currentIndex]);
+            }
+        }
+
+        function prevTrack() {
+            if (audio.currentTime > 3) {
+                audio.currentTime = 0;
+                if(ytPlayer && typeof ytPlayer.seekTo === 'function') ytPlayer.seekTo(0, true);
+            } else if (!isRadioMode && currentQueue.length > 0) {
+                currentIndex--;
+                if (currentIndex < 0) currentIndex = currentQueue.length - 1;
+                loadTrack(currentQueue[currentIndex]);
             }
         }
 
@@ -1110,8 +1377,8 @@ HTML_TEMPLATE = """
                         <div class="card-bottom-row">
                             <div class="card-artist" title="${cleanArtist}">${cleanArtist}</div>
                             <div>
-                                ${playlistToken ? `<button class="action-btn danger" onclick="removeFromPlaylist('${playlistToken}', '${cleanFilename}')" title="Remove"><i class="fas fa-times"></i></button>` : ''}
-                                <button class="action-btn" onclick="openAddToPlaylistModal('${cleanFilename}')" title="Add to Playlist"><i class="fas fa-plus"></i></button>
+                                ${playlistToken ? `<button class="action-btn danger" style="padding: 6px 10px; background: rgba(255,85,85,0.2);" onclick="removeFromPlaylist('${playlistToken}', '${cleanFilename}')" title="Remove"><i class="fas fa-times"></i></button>` : ''}
+                                <button class="action-btn" style="padding: 6px 10px;" onclick="openAddToPlaylistModal('${cleanFilename}')" title="Add to Playlist"><i class="fas fa-plus"></i></button>
                             </div>
                         </div>
                     </div>
@@ -1159,8 +1426,8 @@ HTML_TEMPLATE = """
                         <img src="${coverUrl}" loading="lazy" style="border-radius: 50%;">
                         <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
                     </div>
-                    <div class="card-title">${artist}</div>
-                    <div class="card-artist" style="text-align:center; padding:0;">${groupedArtists[artist].length} tracks</div>
+                    <div class="card-title" style="margin-top: 8px;">${artist}</div>
+                    <div class="card-artist" style="text-align:center; padding:0; margin-top:4px;">${groupedArtists[artist].length} tracks</div>
                 </div>`;
             });
             html += `</div></div>`;
@@ -1171,9 +1438,9 @@ HTML_TEMPLATE = """
             fetch('/api/playlists').then(res => res.json()).then(playlists => {
                 let html = `
                     <div class="fade-in">
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:28px;">
                             <h2 style="margin:0;">🎵 Playlists</h2>
-                            <button class="action-btn" style="background:var(--accent); color:black; padding:10px 18px; font-weight:700;" onclick="createPlaylistPrompt()"><i class="fas fa-plus"></i> New Playlist</button>
+                            <button class="action-btn" style="background:var(--accent); color:black; padding:12px 20px; font-size:14px; box-shadow: 0 5px 15px rgba(29, 185, 84, 0.3);" onclick="createPlaylistPrompt()"><i class="fas fa-plus"></i> New Playlist</button>
                         </div>
                         <div class="grid">
                 `;
@@ -1185,11 +1452,11 @@ HTML_TEMPLATE = """
                     html += `
                     <div class="card" onclick="viewPlaylist('${token}')" style="text-align:center;">
                         <div class="card-img-container">
-                            ${coverUrl ? `<img src="${coverUrl}" loading="lazy">` : '<i class="fas fa-music" style="font-size:40px; color:var(--accent);"></i>'}
+                            ${coverUrl ? `<img src="${coverUrl}" loading="lazy">` : '<i class="fas fa-music" style="font-size:40px; color:rgba(255,255,255,0.2);"></i>'}
                             <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
                         </div>
-                        <div class="card-title" style="text-align:center;">${pl.name.replace(/"/g, '&quot;')}</div>
-                        <div class="card-artist" style="text-align:center; padding:0;">${pl.songs.length} tracks</div>
+                        <div class="card-title" style="text-align:center; margin-top: 8px;">${pl.name.replace(/"/g, '&quot;')}</div>
+                        <div class="card-artist" style="text-align:center; padding:0; margin-top:4px;">${pl.songs.length} tracks</div>
                     </div>`;
                 }
 
@@ -1218,18 +1485,19 @@ HTML_TEMPLATE = """
 
                 contentDiv.innerHTML = `
                     <div class="fade-in">
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:30px; background: rgba(255,255,255,0.02); padding: 30px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.05);">
                             <div>
-                                <h2 style="margin-bottom:4px;">${pl.name.replace(/"/g, '&quot;')}</h2>
-                                <p style="color:var(--subtext); margin:0; font-size:13px;">Created by ${pl.creator}</p>
+                                <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--subtext); margin-bottom: 8px; font-weight: 700;">Playlist</div>
+                                <h2 style="margin-bottom:8px; font-size: 42px;">${pl.name.replace(/"/g, '&quot;')}</h2>
+                                <p style="color:var(--subtext); margin:0; font-size:14px; font-weight: 500;">Created by <span style="color:white;">${pl.creator}</span> • ${playlistSongs.length} tracks</p>
                             </div>
-                            <div style="display:flex; gap:10px;">
-                                ${playlistSongs.length > 0 ? `<button class="action-btn" style="background:var(--accent); color:black; font-weight:700;" onclick="playQueueByFilenames(${filenameArr}, 0)"><i class="fas fa-play"></i> Play Playlist</button>` : ''}
-                                <button class="action-btn" onclick="navigator.clipboard.writeText('${shareUrl}'); alert('Shareable link copied to clipboard!');"><i class="fas fa-share-alt"></i> Share Link</button>
-                                ${(pl.creator === currentSessionUser) || currentUserIsAdmin ? `<button class="action-btn danger" onclick="deletePlaylist('${token}')"><i class="fas fa-trash"></i> Delete</button>` : ''}
+                            <div style="display:flex; gap:12px;">
+                                ${playlistSongs.length > 0 ? `<button class="action-btn" style="background:var(--accent); color:black; padding: 12px 24px; font-size:15px; box-shadow: 0 5px 15px rgba(29, 185, 84, 0.3);" onclick="playQueueByFilenames(${filenameArr}, 0)"><i class="fas fa-play"></i> Play</button>` : ''}
+                                <button class="action-btn" style="padding: 12px 18px;" onclick="navigator.clipboard.writeText('${shareUrl}'); alert('Shareable link copied to clipboard!');"><i class="fas fa-share-alt"></i> Share</button>
+                                ${(pl.creator === currentSessionUser) || currentUserIsAdmin ? `<button class="action-btn danger" style="padding: 12px 18px;" onclick="deletePlaylist('${token}')"><i class="fas fa-trash"></i></button>` : ''}
                             </div>
                         </div>
-                        ${playlistSongs.length === 0 ? '<p style="color:var(--subtext);">This playlist is empty. Add songs from any track card!</p>' : buildCardsHTML(playlistSongs, false, token)}
+                        ${playlistSongs.length === 0 ? '<div style="text-align:center; padding: 60px; color:rgba(255,255,255,0.4); font-weight:600; background:rgba(0,0,0,0.2); border-radius:16px;">This playlist is empty. Add songs from any track card!</div>' : buildCardsHTML(playlistSongs, false, token)}
                     </div>
                 `;
             });
@@ -1257,12 +1525,12 @@ HTML_TEMPLATE = """
                 let myPlaylists = Object.entries(playlists).filter(([t, p]) => p.creator === currentSessionUser);
 
                 if (myPlaylists.length === 0) {
-                    html = '<p style="color:var(--subtext);">No playlists found. Create one from the Playlists tab!</p>';
+                    html = '<p style="color:rgba(255,255,255,0.5); font-weight:600;">No playlists found. Create one from the Playlists tab!</p>';
                 } else {
                     for (let [token, pl] of myPlaylists) {
                         html += `<div class="playlist-select-item" onclick="confirmAddToPlaylist('${token}')">
-                            <span><i class="fas fa-list"></i> ${pl.name.replace(/"/g, '&quot;')}</span>
-                            <span style="font-size:12px; color:var(--subtext);">${pl.songs.length} tracks</span>
+                            <span style="font-size: 15px;"><i class="fas fa-list" style="margin-right:8px; color:var(--subtext);"></i> ${pl.name.replace(/"/g, '&quot;')}</span>
+                            <span style="font-size:12px; color:rgba(255,255,255,0.3);">${pl.songs.length} tracks</span>
                         </div>`;
                     }
                 }
@@ -1295,22 +1563,22 @@ HTML_TEMPLATE = """
                 <div class="fade-in social-container">
                     <div class="social-sidebar">
                         <div class="social-sidebar-header">
-                            <h3 style="margin:0 0 12px 0;">Friends</h3>
-                            <div style="display:flex; gap:8px;">
-                                <input type="text" id="add-friend-input" placeholder="Enter username..." style="flex:1; padding:8px 12px; border-radius:18px; border:none; background:#282828; color:white; font-size:12px; outline:none;">
-                                <button class="action-btn" style="padding:6px 12px; border-radius:18px;" onclick="sendFriendRequest()"><i class="fas fa-user-plus"></i></button>
+                            <h3 style="margin:0 0 16px 0; font-size:20px; font-weight:800; letter-spacing:-0.5px;">Friends</h3>
+                            <div style="display:flex; gap:10px;">
+                                <input type="text" id="add-friend-input" placeholder="Enter username..." style="flex:1; padding:12px 16px; border-radius:20px; border:1px solid rgba(255,255,255,0.1); background:rgba(0,0,0,0.3); color:white; font-size:13px; outline:none; font-family:'Outfit', sans-serif;">
+                                <button class="action-btn" style="padding:10px 16px; border-radius:20px; background:var(--accent); color:black;" onclick="sendFriendRequest()"><i class="fas fa-user-plus"></i></button>
                             </div>
                         </div>
                         <div class="social-list" id="friends-list-container">
-                            <div style="text-align:center; padding:20px; color:var(--subtext);"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
+                            <div style="text-align:center; padding:30px; color:rgba(255,255,255,0.3); font-weight:600;"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
                         </div>
                     </div>
                     
                     <div class="chat-area" id="chat-area">
-                        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--subtext);">
-                            <i class="fas fa-comments" style="font-size:48px; margin-bottom:16px; opacity:0.5;"></i>
-                            <h3>Your Messages</h3>
-                            <p>Select a friend to start chatting</p>
+                        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:rgba(255,255,255,0.2);">
+                            <i class="fas fa-comment-dots" style="font-size:64px; margin-bottom:20px;"></i>
+                            <h3 style="font-weight:700; margin-bottom:8px;">Your Messages</h3>
+                            <p style="font-weight:500;">Select a friend to start chatting</p>
                         </div>
                     </div>
                 </div>
@@ -1323,23 +1591,23 @@ HTML_TEMPLATE = """
                 let html = '';
                 
                 if(data.requests && data.requests.length > 0) {
-                    html += `<div style="font-size:11px; text-transform:uppercase; color:var(--accent); font-weight:700; margin:10px 0 6px 4px;">Pending Requests</div>`;
+                    html += `<div style="font-size:11px; text-transform:uppercase; color:var(--accent); font-weight:800; margin:14px 0 8px 8px; letter-spacing:1px;">Pending Requests</div>`;
                     data.requests.forEach(req => {
                         let pfp = req.pfp ? req.pfp : "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%231DB954'><path d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z'/></svg>";
                         html += `
-                        <div class="friend-item" style="border: 1px dashed var(--accent);">
+                        <div class="friend-item" style="border: 1px dashed rgba(29, 185, 84, 0.4); background:rgba(29, 185, 84, 0.05);">
                             <div class="friend-item-info">
                                 <img src="${pfp}" class="friend-pfp">
-                                <span style="font-weight:600; font-size:14px;">${req.username}</span>
+                                <span style="font-weight:700; font-size:15px;">${req.username}</span>
                             </div>
                             <div>
-                                <button class="action-btn" style="background:var(--accent); color:black; padding:4px 8px;" onclick="acceptFriend('${req.username}')"><i class="fas fa-check"></i></button>
+                                <button class="action-btn" style="background:var(--accent); color:black; padding:6px 10px;" onclick="acceptFriend('${req.username}')"><i class="fas fa-check"></i></button>
                             </div>
                         </div>`;
                     });
                 }
                 
-                html += `<div style="font-size:11px; text-transform:uppercase; color:var(--subtext); font-weight:700; margin:14px 0 6px 4px;">Direct Messages</div>`;
+                html += `<div style="font-size:11px; text-transform:uppercase; color:var(--subtext); font-weight:800; margin:20px 0 8px 8px; letter-spacing:1px;">Direct Messages</div>`;
                 if(data.friends && data.friends.length > 0) {
                     data.friends.forEach(f => {
                         let pfp = f.pfp ? f.pfp : "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23555'><path d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z'/></svg>";
@@ -1350,8 +1618,8 @@ HTML_TEMPLATE = """
                             let songMeta = allSongs.find(s => s.filename === f.now_playing.song);
                             if(songMeta) {
                                 let cleanFilename = songMeta.filename.replace(/'/g, "\\'");
-                                let listenAlongBtn = `<button class="action-btn" style="padding:4px 8px; font-size:10px; margin-top:4px; background:var(--accent); color:black;" onclick="event.stopPropagation(); playSongByFilename('${cleanFilename}')"><i class="fas fa-headphones"></i> Listen Along</button>`;
-                                npText = `<div style="font-size:11px; color:var(--accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; width: 150px; margin-top: 2px;"><i class="fas fa-play" style="font-size:8px;"></i> ${songMeta.title.replace(/</g, '&lt;')}</div>${listenAlongBtn}`;
+                                let listenAlongBtn = `<button class="action-btn" style="padding:4px 10px; font-size:10px; margin-top:6px; background:rgba(29, 185, 84, 0.2); color:var(--accent);" onclick="event.stopPropagation(); playSongByFilename('${cleanFilename}')"><i class="fas fa-headphones"></i> Listen Along</button>`;
+                                npText = `<div style="font-size:12px; font-weight:600; color:var(--accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; width: 170px; margin-top: 4px;"><i class="fas fa-play" style="font-size:9px; margin-right:4px;"></i> ${songMeta.title.replace(/</g, '&lt;')}</div>${listenAlongBtn}`;
                             }
                         }
 
@@ -1360,14 +1628,14 @@ HTML_TEMPLATE = """
                             <div class="friend-item-info">
                                 <img src="${pfp}" class="friend-pfp">
                                 <div style="display:flex; flex-direction:column;">
-                                    <span style="font-weight:600; font-size:14px;">${f.username}</span>
+                                    <span style="font-weight:700; font-size:15px;">${f.username}</span>
                                     ${npText}
                                 </div>
                             </div>
                         </div>`;
                     });
                 } else {
-                    html += `<div style="padding:10px; color:var(--subtext); font-size:13px;">No friends yet. Send a request!</div>`;
+                    html += `<div style="padding:16px; color:rgba(255,255,255,0.3); font-size:13px; font-weight:600; text-align:center;">No friends yet. Send a request!</div>`;
                 }
                 
                 let container = document.getElementById('friends-list-container');
@@ -1409,11 +1677,11 @@ HTML_TEMPLATE = """
             
             document.getElementById('chat-area').innerHTML = `
                 <div class="chat-header">
-                    <img src="${friendPfp}" class="friend-pfp" style="width:40px; height:40px;">
-                    <div style="font-size:18px; font-weight:700;">${friendUsername}</div>
+                    <img src="${friendPfp}" class="friend-pfp" style="width:48px; height:48px;">
+                    <div style="font-size:20px; font-weight:800; letter-spacing:-0.5px;">${friendUsername}</div>
                 </div>
                 <div class="chat-history" id="chat-history-container">
-                    <div style="text-align:center; padding:20px; color:var(--subtext);"><i class="fas fa-spinner fa-spin"></i> Loading messages...</div>
+                    <div style="text-align:center; padding:40px; color:rgba(255,255,255,0.3); font-weight:600;"><i class="fas fa-spinner fa-spin"></i> Loading messages...</div>
                 </div>
                 <div class="chat-input-area">
                     <input type="text" id="chat-msg-input" class="chat-input" placeholder="Type a message..." onkeypress="if(event.key === 'Enter') sendMessage()">
@@ -1442,7 +1710,7 @@ HTML_TEMPLATE = """
                     
                     let html = '';
                     if(data.messages.length === 0) {
-                        html = `<div style="text-align:center; color:var(--subtext); margin-top:auto; margin-bottom:auto;">Say hi to ${currentChatFriend}!</div>`;
+                        html = `<div style="text-align:center; color:rgba(255,255,255,0.3); font-weight:600; margin-top:auto; margin-bottom:auto;">Say hi to ${currentChatFriend}!</div>`;
                     } else {
                         data.messages.forEach(m => {
                             let isMe = m.from === currentSessionUser;
@@ -1479,66 +1747,76 @@ HTML_TEMPLATE = """
         function renderSettings() {
             let html = `
                 <div class="fade-in">
-                <h2>⚙️ Settings</h2>
+                <h2 style="font-size:36px;"><i class="fas fa-cog" style="color:var(--accent); font-size:28px; margin-right:12px;"></i>Settings</h2>
                 
-                <div class="admin-card" style="margin-bottom:24px;">
-                    <h3 style="margin-top:0; font-size:16px;">Profile Customization</h3>
-                    <form onsubmit="changeUsername(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 350px; margin-bottom: 24px;">
+                <div class="admin-card" style="margin-bottom:30px;">
+                    <h3 style="margin-top:0; font-size:18px; font-weight:800;">Profile Customization</h3>
+                    <form onsubmit="changeUsername(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 380px; margin-bottom: 28px;">
                         <div>
-                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">Change Username</div>
-                            <input type="text" id="new-username-input" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:6px; font-weight:600; text-transform:uppercase; letter-spacing:1px;">Change Username</div>
+                            <input type="text" id="new-username-input" required style="margin:0; padding:12px 16px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); border-radius:8px; color:white; width:100%; font-family:'Outfit', sans-serif;">
                         </div>
-                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700; margin-top:4px;">Update Username</button>
+                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:12px; font-weight:700; margin-top:4px;">Update Username</button>
                     </form>
 
-                    <form onsubmit="updateProfile(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 350px;">
+                    <form onsubmit="updateProfile(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 380px;">
                         <div>
-                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">Profile Picture Upload</div>
-                            <input type="file" id="pfp-input" accept="image/*" style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:6px; font-weight:600; text-transform:uppercase; letter-spacing:1px;">Profile Picture</div>
+                            <input type="file" id="pfp-input" accept="image/*" style="margin:0; padding:12px 16px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); border-radius:8px; color:white; width:100%; font-family:'Outfit', sans-serif;">
                         </div>
                         <div>
-                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">App Background Color</div>
-                            <input type="color" id="bg-color-input" value="${getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()}" style="margin:0; background:#222; border:1px solid #333; border-radius:6px; cursor:pointer; width:100%; height:40px;">
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:6px; font-weight:600; text-transform:uppercase; letter-spacing:1px;">Theme Color</div>
+                            <input type="color" id="bg-color-input" value="${getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()}" style="margin:0; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); border-radius:8px; cursor:pointer; width:100%; height:45px;">
                         </div>
-                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700; margin-top:4px;">Save Customizations</button>
+                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:12px; font-weight:700; margin-top:4px;">Save Customizations</button>
                     </form>
                 </div>
 
-                <div class="admin-card">
-                    <h3 style="margin-top:0; font-size:16px;">Change Password</h3>
-                    <form onsubmit="changePassword(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 350px;">
+                <div class="admin-card" style="margin-bottom:30px;">
+                    <h3 style="margin-top:0; font-size:18px; font-weight:800;">Change Password</h3>
+                    <form onsubmit="changePassword(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 380px;">
                         <div>
-                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">Current Password</div>
-                            <input type="password" id="curr-pass" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:6px; font-weight:600; text-transform:uppercase; letter-spacing:1px;">Current Password</div>
+                            <input type="password" id="curr-pass" required style="margin:0; padding:12px 16px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); border-radius:8px; color:white; width:100%; font-family:'Outfit', sans-serif;">
                         </div>
                         <div>
-                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">New Password</div>
-                            <input type="password" id="new-pass-user" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:6px; font-weight:600; text-transform:uppercase; letter-spacing:1px;">New Password</div>
+                            <input type="password" id="new-pass-user" required style="margin:0; padding:12px 16px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); border-radius:8px; color:white; width:100%; font-family:'Outfit', sans-serif;">
                         </div>
-                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700; margin-top:4px;">Update Password</button>
+                        <button type="submit" class="action-btn" style="background:var(--text); color:black; padding:12px; font-weight:700; margin-top:4px;">Update Password</button>
                     </form>
                 </div>
             `;
 
             if (currentUserIsAdmin) {
                 html += `
-                <h2 style="margin-top:40px;"><i class="fas fa-users-cog" style="color:var(--accent)"></i> User Management</h2>
-                <div class="admin-card">
-                    <h3 style="margin-top:0; font-size:16px;">Create New Account</h3>
-                    <form onsubmit="createUser(event)" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                        <input type="text" id="new-user" placeholder="Username" required style="margin:0; flex:1; min-width:160px; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white;">
-                        <input type="password" id="new-pass" placeholder="Password" required style="margin:0; flex:1; min-width:160px; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white;">
+                <div class="admin-card" style="margin-bottom:30px; border: 1px solid rgba(29, 185, 84, 0.4); background: rgba(29, 185, 84, 0.05);">
+                    <h3 style="margin-top:0; font-size:20px; font-weight:800; color:var(--accent); letter-spacing:-0.5px;"><i class="fas fa-cloud-upload-alt" style="margin-right:10px;"></i>Upload Music</h3>
+                    <p style="font-size:14px; color:var(--text); opacity:0.8; margin-top:0; font-weight:500;">Upload MP3 or FLAC files directly to your server's persistent storage.</p>
+                    <form onsubmit="uploadMusic(event)" style="display:flex; flex-direction:column; gap:16px;">
+                        <input type="file" id="music-upload-input" accept="audio/mpeg, audio/flac, audio/ogg, audio/wav, audio/mp4" multiple style="margin:0; padding:16px; background:rgba(0,0,0,0.4); border:1px solid rgba(29, 185, 84, 0.3); border-radius:10px; color:white; width:100%; font-family:'Outfit', sans-serif; cursor:pointer;">
+                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:14px; font-size:16px; font-weight:800; box-shadow: 0 5px 15px rgba(29, 185, 84, 0.3);">Upload Tracks</button>
+                    </form>
+                    <div id="upload-status" style="margin-top: 14px; font-size: 14px; font-weight: 700;"></div>
+                </div>
+
+                <h2 style="margin-top:50px; font-size:32px;"><i class="fas fa-users-cog" style="color:var(--accent); font-size:24px; margin-right:12px;"></i>User Management</h2>
+                <div class="admin-card" style="margin-bottom:30px;">
+                    <h3 style="margin-top:0; font-size:18px; font-weight:800;">Create New Account</h3>
+                    <form onsubmit="createUser(event)" style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+                        <input type="text" id="new-user" placeholder="Username" required style="margin:0; flex:1; min-width:180px; padding:12px 16px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); border-radius:8px; color:white; font-family:'Outfit', sans-serif;">
+                        <input type="password" id="new-pass" placeholder="Password" required style="margin:0; flex:1; min-width:180px; padding:12px 16px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); border-radius:8px; color:white; font-family:'Outfit', sans-serif;">
                         
-                        <select id="new-role" style="padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; outline:none; cursor:pointer;">
+                        <select id="new-role" style="padding:12px 16px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); border-radius:8px; color:white; outline:none; cursor:pointer; font-family:'Outfit', sans-serif; font-weight:600;">
                             <option value="user">Standard User</option>
                             <option value="admin">Administrator</option>
                         </select>
                         
-                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px 18px; font-weight:700;">Create Account</button>
+                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:12px 20px; font-weight:700;">Create Account</button>
                     </form>
                 </div>
-                <div class="admin-card" style="max-width:100%;">
-                    <h3 style="margin-top:0; font-size:16px;">Existing Accounts</h3>
+                <div class="admin-card" style="max-width:100%; overflow-x: auto;">
+                    <h3 style="margin-top:0; font-size:18px; font-weight:800;">Existing Accounts</h3>
                     <div id="users-table-container">Loading users...</div>
                 </div>
                 `;
@@ -1547,6 +1825,34 @@ HTML_TEMPLATE = """
             html += `</div>`;
             contentDiv.innerHTML = html;
             if (currentUserIsAdmin) loadUsersTable();
+        }
+
+        function uploadMusic(e) {
+            e.preventDefault();
+            let fileInput = document.getElementById('music-upload-input');
+            if (fileInput.files.length === 0) return alert("Select files first.");
+            
+            let formData = new FormData();
+            for(let i=0; i<fileInput.files.length; i++) {
+                formData.append('files', fileInput.files[i]);
+            }
+            
+            let status = document.getElementById('upload-status');
+            status.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Uploading ${fileInput.files.length} files... Do not close this page.`;
+            
+            fetch('/api/admin/upload', {
+                method: 'POST',
+                body: formData
+            }).then(res => res.json()).then(data => {
+                if(data.success) {
+                    status.innerHTML = `<span style="color:var(--accent)"><i class="fas fa-check"></i> Successfully uploaded ${data.saved} tracks! Reloading...</span>`;
+                    setTimeout(() => window.location.reload(), 1500);
+                } else {
+                    status.innerHTML = `<span style="color:#ff5555"><i class="fas fa-times"></i> ${data.error}</span>`;
+                }
+            }).catch(err => {
+                status.innerHTML = `<span style="color:#ff5555"><i class="fas fa-times"></i> Upload failed. Files might be too large.</span>`;
+            });
         }
 
         function changeUsername(e) {
@@ -1608,7 +1914,7 @@ HTML_TEMPLATE = """
                 for (let [uname, udata] of Object.entries(data)) {
                     let roleBadge = udata.is_admin ? '<span class="badge-admin">Administrator</span>' : '<span class="badge-user">Standard User</span>';
                     html += `<tr>
-                        <td><strong>${uname}</strong></td>
+                        <td><strong style="font-size:16px;">${uname}</strong></td>
                         <td>${roleBadge}</td>
                         <td style="text-align:right;">
                             <button class="action-btn danger" onclick="deleteUser('${uname}')"><i class="fas fa-trash"></i> Delete</button>
@@ -1727,7 +2033,7 @@ def index():
     current_user_data = users.get(session['user'], {})
     is_admin = current_user_data.get('is_admin', False)
     user_pfp = current_user_data.get('pfp', '')
-    user_bg = current_user_data.get('bg_color', '#050505')
+    user_bg = current_user_data.get('bg_color', '#080808')
 
     return render_template_string(HTML_TEMPLATE, is_admin=is_admin, user_pfp=user_pfp, user_bg=user_bg)
 
@@ -1743,7 +2049,7 @@ def login():
         password = request.form.get('password', '')
 
         if setup:
-            db["users"] = {username: {'password': generate_password_hash(password), 'is_admin': True, 'likes': [], 'dislikes': [], 'play_counts': {}, 'bg_color': '#050505', 'pfp': '', 'friends': [], 'friend_requests': []}}
+            db["users"] = {username: {'password': generate_password_hash(password), 'is_admin': True, 'likes': [], 'dislikes': [], 'play_counts': {}, 'bg_color': '#080808', 'pfp': '', 'friends': [], 'friend_requests': []}}
             save_db(db)
             session['user'] = username
             session['is_admin'] = True
@@ -1763,22 +2069,64 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
+# --- RAW BYTE-RANGE STREAMING FIX ---
 @app.route('/play/<path:filename>')
 def play(filename):
     if 'user' not in session: return "Unauthorized", 401
     
-    # Decodes URL encoded subpaths safely
     clean_filename = urllib.parse.unquote(filename).lstrip('/')
     filepath = os.path.normpath(os.path.join(MUSIC_DIR, clean_filename))
     
     if not os.path.exists(filepath):
         return "Audio file not found", 404
-        
-    directory = os.path.dirname(filepath)
-    file_basename = os.path.basename(filepath)
+
+    file_size = os.path.getsize(filepath)
+    range_header = request.headers.get('Range', None)
     
-    # Serving directly from absolute directory path fixes subfolder issues
-    return send_from_directory(directory, file_basename)
+    mime_type, _ = mimetypes.guess_type(filepath)
+    if not mime_type:
+        mime_type = 'audio/flac' if filepath.lower().endswith('.flac') else 'audio/mpeg'
+
+    # Handle Partial Content Requests (Required for FLAC and Seeking)
+    if range_header:
+        match = re.search(r'bytes=(\d+)-(\d*)', range_header)
+        if match:
+            groups = match.groups()
+            byte1 = int(groups[0])
+            byte2 = int(groups[1]) if groups[1] else file_size - 1
+        else:
+            byte1, byte2 = 0, file_size - 1
+
+        length = byte2 - byte1 + 1
+
+        def generate():
+            with open(filepath, 'rb') as f:
+                f.seek(byte1)
+                chunk_size = 8192
+                remaining = length
+                while remaining > 0:
+                    data = f.read(min(chunk_size, remaining))
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        rv = Response(generate(), 206, mimetype=mime_type, direct_passthrough=True)
+        rv.headers.add('Content-Range', f'bytes {byte1}-{byte2}/{file_size}')
+        rv.headers.add('Accept-Ranges', 'bytes')
+        rv.headers.add('Content-Length', str(length))
+        return rv
+        
+    else:
+        # Full File Stream
+        def generate():
+            with open(filepath, 'rb') as f:
+                while chunk := f.read(8192):
+                    yield chunk
+        rv = Response(generate(), 200, mimetype=mime_type, direct_passthrough=True)
+        rv.headers.add('Content-Length', str(file_size))
+        rv.headers.add('Accept-Ranges', 'bytes')
+        return rv
 
 @app.route('/download/<path:filename>')
 def download(filename):
@@ -2028,6 +2376,27 @@ def api_feedback():
     return jsonify({"success": True})
 
 # --- PROFILE CUSTOMIZATION API ROUTES ---
+@app.route('/api/admin/upload', methods=['POST'])
+def api_admin_upload():
+    if not session.get('is_admin'):
+        return jsonify({"error": "Unauthorized"}), 403
+
+    if 'files' not in request.files:
+        return jsonify({"error": "No files provided"}), 400
+        
+    files = request.files.getlist('files')
+    saved = 0
+    for file in files:
+        if file.filename:
+            filename = file.filename.replace('/', '').replace('\\', '')
+            filepath = os.path.join(MUSIC_DIR, filename)
+            file.save(filepath)
+            saved += 1
+            
+    global _meta_cache_dirty
+    _meta_cache_dirty = True
+    return jsonify({"success": True, "saved": saved})
+
 @app.route('/api/settings/username', methods=['POST'])
 def change_username_api():
     if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
