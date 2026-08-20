@@ -216,7 +216,7 @@ def get_aggregated_stats():
             if song in stats: stats[song]["plays"] += count
     return stats
 
-def get_radio_recommendation(username, history_list=None):
+def get_radio_recommendation(username, history_list=None, current_artist=None):
     db = load_db()
     user = db["users"].get(username, {})
     likes = set(user.get("likes", []))
@@ -233,12 +233,22 @@ def get_radio_recommendation(username, history_list=None):
 
     weights = []
     for song in valid_songs:
-        weight = 10.0
-        if song in likes: weight += 15.0
+        meta = get_song_metadata(song)
+        weight = 20.0
+        if song in likes: weight += 30.0
+
         plays = play_counts.get(song, 0)
-        if plays == 0: weight += 25.0
-        else: weight = max(2.0, weight - (plays * 1.5))
-        weight *= random.uniform(0.8, 1.4)
+        if plays == 0:
+            weight += 15.0 
+        else:
+            penalty = plays * 2.0
+            if song in likes: penalty *= 0.5 
+            weight = max(5.0, weight - penalty)
+
+        if current_artist and meta['artist'].lower() == current_artist.lower():
+            weight += 25.0
+
+        weight *= random.uniform(0.8, 1.2)
         weights.append(weight)
 
     recommended_filename = random.choices(valid_songs, weights=weights, k=1)[0]
@@ -541,6 +551,11 @@ HTML_TEMPLATE = """
         .eq-bar:nth-child(3) { height: 50%; animation-delay: 0.4s; }
         .eq-container.paused .eq-bar { animation-play-state: paused; height: 20% !important; transition: height 0.3s ease; box-shadow: none;}
         @keyframes eqbounce { 0%, 100% { transform: scaleY(0.6); } 50% { transform: scaleY(1.0); } }
+        
+        @keyframes radioPulse { 
+            0% { transform: scale(0.95); opacity: 0.3; } 
+            100% { transform: scale(1.15); opacity: 0.6; } 
+        }
     </style>
 </head>
 <body>
@@ -1124,6 +1139,12 @@ HTML_TEMPLATE = """
         function switchView(view, el=null) {
             document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
             if(el) el.classList.add('active');
+            else {
+                let idx = ['home', 'search', 'artists', 'playlists', 'radio', 'messages', 'settings'].indexOf(view);
+                if (idx !== -1) {
+                    let items = document.querySelectorAll('.nav-item');
+                }
+            }
             
             document.getElementById('global-search').value = '';
             
@@ -1136,7 +1157,14 @@ HTML_TEMPLATE = """
             if (view === 'artists') renderArtists();
             if (view === 'playlists') renderPlaylists();
             if (view === 'messages') renderMessages();
-            if (view === 'radio') startRadio();
+            if (view === 'radio') {
+                renderRadio();
+                if (!isRadioMode) {
+                    startRadio();
+                } else {
+                    updateRadioUI();
+                }
+            }
             if (view === 'settings') renderSettings();
         }
 
@@ -1167,6 +1195,234 @@ HTML_TEMPLATE = """
             let songIndex = allSongs.findIndex(s => s.filename === filename);
             if(songIndex !== -1) {
                 playQueue(allSongs, songIndex);
+            }
+        }
+
+        function renderRadio() {
+            contentDiv.innerHTML = `
+                <div class="fade-in" style="display:flex; flex-direction:column; align-items:center; justify-content:center; height: 100%; text-align:center;">
+                    <div style="position:relative; width: 160px; height: 160px; display:flex; align-items:center; justify-content:center; margin-bottom: 40px;">
+                        <div class="radio-glow"></div>
+                        <i class="fas fa-broadcast-tower" style="font-size: 64px; color: var(--text); z-index: 2; filter: drop-shadow(0 0 10px rgba(255,255,255,0.5));"></i>
+                    </div>
+                    <h2 style="font-size: 48px; margin-bottom: 16px; font-weight: 800; letter-spacing: -1px;">Infinite Radio</h2>
+                    <p style="color: var(--subtext); font-size: 18px; max-width: 450px; line-height: 1.6; margin-bottom: 40px; font-weight:500;">
+                        An endless stream tailored to your listening habits, blending your favorites with seamless discovery.
+                    </p>
+                    <div id="radio-current-status" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 18px 28px; border-radius: 30px; display: flex; align-items: center; gap: 12px; font-weight: 700; box-shadow: 0 10px 25px rgba(0,0,0,0.3);">
+                        <i class="fas fa-satellite-dish" style="color: var(--accent);"></i> Tuning in...
+                    </div>
+                </div>
+            `;
+        }
+
+        function updateRadioUI() {
+            if (isRadioMode) {
+                const statusEl = document.getElementById('radio-current-status');
+                if (statusEl && currentSongObj) {
+                    statusEl.innerHTML = `<i class="fas fa-volume-up" style="color: var(--accent);"></i> Broadcasting: <span style="color:white; margin-left:6px;">${currentSongObj.title}</span> <span style="color:var(--subtext); margin-left:6px;">by ${currentSongObj.artist}</span>`;
+                }
+            }
+        }
+
+        function startRadio() {
+            isRadioMode = true;
+            radioHistory = [];
+            currentQueue = [];
+            
+            document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
+            let navItems = document.querySelectorAll('.nav-item');
+            if(navItems.length > 4) navItems[4].classList.add('active'); 
+            
+            if (!currentSongObj) {
+                nextTrack();
+            } else {
+                updateRadioUI();
+            }
+        }
+
+        function loadTrack(songObj) {
+            if (!songObj) return;
+            currentSongObj = songObj;
+            
+            // Fix: Map components to safely URL encode folder structures while keeping slashes intact
+            let fileUrl = `/play/` + songObj.filename.split('/').map(encodeURIComponent).join('/');
+            audio.src = fileUrl;
+            
+            document.getElementById('np-title').innerText = songObj.title;
+            document.getElementById('np-artist').innerText = songObj.artist;
+            document.getElementById('rp-title').innerText = songObj.title;
+            document.getElementById('rp-artist').innerText = songObj.artist;
+            
+            let coverUrl = getCoverUrl(songObj);
+            document.getElementById('np-cover').src = coverUrl;
+            document.getElementById('rp-cover').src = coverUrl;
+            document.getElementById('rp-cover-glow').style.backgroundImage = `url("${coverUrl}")`;
+            
+            document.getElementById('download-btn').href = `/download/` + songObj.filename.split('/').map(encodeURIComponent).join('/');
+            document.getElementById('download-btn').style.display = 'inline-block';
+            
+            updateMediaSession(songObj, coverUrl);
+            fetchStatusAndLog(songObj.filename);
+            
+            audio.play();
+            renderQueue();
+            
+            document.getElementById('rp-video-container').style.opacity = '0';
+            fetch(`/api/video?artist=${encodeURIComponent(songObj.artist)}&song=${encodeURIComponent(songObj.title)}`)
+                .then(res => res.json())
+                .then(data => {
+                    if(data.youtube_id && ytPlayerReady) {
+                        if(!ytPlayer) {
+                            ytPlayer = new YT.Player('rp-video', {
+                                videoId: data.youtube_id,
+                                playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0, 'modestbranding': 1, 'rel': 0, 'showinfo': 0, 'mute': 1 },
+                                events: {
+                                    'onReady': (e) => { e.target.playVideo(); document.getElementById('rp-video-container').style.opacity = '1'; }
+                                }
+                            });
+                        } else {
+                            ytPlayer.loadVideoById(data.youtube_id);
+                            document.getElementById('rp-video-container').style.opacity = '1';
+                        }
+                    } else if (ytPlayer) {
+                        ytPlayer.stopVideo();
+                        document.getElementById('rp-video-container').style.opacity = '0';
+                    }
+                });
+
+            lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;"><i class="fas fa-spinner fa-spin"></i> Searching for lyrics...</div>';
+            syncedLyrics = [];
+            activeLyricIndex = -1;
+            
+            let query = `${songObj.artist} ${songObj.title}`.toLowerCase();
+            let cleanQuery = query.replace(/\s*\(feat\..*?\)/g, '').replace(/\s*ft\..*$/g, '').replace(/[^a-z0-9 ]/g, '');
+            
+            fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(cleanQuery)}`)
+                .then(r => r.json())
+                .then(results => {
+                    if (results && results.length > 0) {
+                        let bestMatch = results.find(r => r.syncedLyrics);
+                        if (bestMatch && bestMatch.syncedLyrics) {
+                            let parsed = parseLrc(bestMatch.syncedLyrics);
+                            syncedLyrics = parsed;
+                            renderLyrics(parsed);
+                        } else if (bestMatch && bestMatch.plainLyrics) {
+                            renderPlainLyrics(bestMatch.plainLyrics);
+                        } else {
+                            lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">No lyrics found for this track.</div>';
+                        }
+                    } else {
+                        lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">No lyrics found for this track.</div>';
+                    }
+                }).catch(() => {
+                    lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">Failed to load lyrics.</div>';
+                });
+        }
+
+        function parseLrc(lrcString) {
+            const lines = lrcString.split('\\n');
+            const parsed = [];
+            const timeRegex = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const match = timeRegex.exec(line);
+                if (match) {
+                    const minutes = parseInt(match[1], 10);
+                    const seconds = parseInt(match[2], 10);
+                    const milliseconds = parseInt(match[3].padEnd(3, '0'), 10);
+                    const timeInSeconds = (minutes * 60) + seconds + (milliseconds / 1000);
+                    
+                    const text = line.replace(timeRegex, '').trim();
+                    if(text) {
+                        const words = text.split(' ');
+                        const wordTimings = [];
+                        let accum = 0;
+                        for(let w=0; w<words.length; w++) {
+                            const chunk = 1 / words.length;
+                            wordTimings.push({ word: words[w], startPercent: accum, endPercent: accum + chunk });
+                            accum += chunk;
+                        }
+                        
+                        parsed.push({ time: timeInSeconds, text: text, words: words, wordTimings: wordTimings, duration: 3.0 });
+                    }
+                }
+            }
+            
+            for(let i=0; i<parsed.length - 1; i++) {
+                parsed[i].duration = parsed[i+1].time - parsed[i].time;
+                if(parsed[i].duration <= 0 || parsed[i].duration > 10) parsed[i].duration = 3.0;
+            }
+            
+            return parsed;
+        }
+
+        function renderLyrics(parsedLines) {
+            let html = '<div style="height: 50%;"></div>';
+            parsedLines.forEach((line, index) => {
+                let wordsHtml = line.wordTimings.map(wt => `<span class="lyric-word">${wt.word}</span>`).join(' ');
+                html += `<div class="lyric-line" id="lyric-${index}" onclick="seekTo(${line.time})">${wordsHtml}</div>`;
+            });
+            html += '<div style="height: 50%;"></div>';
+            lyricsContainer.innerHTML = html;
+        }
+
+        function renderPlainLyrics(text) {
+            let html = '<div style="height: 20px;"></div>';
+            text.split('\\n').forEach(line => {
+                if(line.trim()) html += `<div class="lyric-line" style="cursor:default;">${line.replace(/</g, '&lt;')}</div>`;
+                else html += `<br>`;
+            });
+            html += '<div style="height: 50px;"></div>';
+            lyricsContainer.innerHTML = html;
+        }
+
+        function seekTo(timeSeconds) {
+            if(!audio.duration) return;
+            audio.currentTime = timeSeconds;
+            if(ytPlayer && typeof ytPlayer.seekTo === 'function') ytPlayer.seekTo(timeSeconds, true);
+        }
+
+        function nextTrack() {
+            if (isRadioMode) {
+                if (currentSongObj) radioHistory.push(currentSongObj.filename);
+                if (radioHistory.length > 30) radioHistory.shift();
+                
+                let histParam = radioHistory.map(encodeURIComponent).join(',');
+                let artistParam = currentSongObj ? encodeURIComponent(currentSongObj.artist) : '';
+                
+                fetch('/api/radio/next?history=' + histParam + '&current_artist=' + artistParam)
+                    .then(res => res.json())
+                    .then(data => { 
+                        if(data.song) {
+                            loadTrack(data.song);
+                            updateRadioUI();
+                        }
+                    });
+            } else {
+                if (currentQueue.length === 0) return;
+                currentIndex++;
+                if (currentIndex >= currentQueue.length) {
+                    currentIndex = 0;
+                    if (!isRepeat) {
+                        audio.pause();
+                        renderQueue();
+                        return;
+                    }
+                }
+                loadTrack(currentQueue[currentIndex]);
+            }
+        }
+
+        function prevTrack() {
+            if (audio.currentTime > 3) {
+                audio.currentTime = 0;
+                if(ytPlayer && typeof ytPlayer.seekTo === 'function') ytPlayer.seekTo(0, true);
+            } else if (!isRadioMode && currentQueue.length > 0) {
+                currentIndex--;
+                if (currentIndex < 0) currentIndex = currentQueue.length - 1;
+                loadTrack(currentQueue[currentIndex]);
             }
         }
 
@@ -1925,7 +2181,7 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
-# --- RAW BYTE-RANGE STREAMING FIX ---
+# --- NATIVE BYTE-RANGE STREAMING FIX ---
 @app.route('/play/<path:filename>')
 def play(filename):
     if 'user' not in session: return "Unauthorized", 401
@@ -1933,56 +2189,19 @@ def play(filename):
     clean_filename = urllib.parse.unquote(filename).lstrip('/')
     filepath = os.path.normpath(os.path.join(MUSIC_DIR, clean_filename))
     
+    # Security check to prevent directory traversal out of MUSIC_DIR
+    if not filepath.startswith(MUSIC_DIR):
+        return "Unauthorized", 403
+
     if not os.path.exists(filepath):
         return "Audio file not found", 404
-
-    file_size = os.path.getsize(filepath)
-    range_header = request.headers.get('Range', None)
-    
+        
     mime_type, _ = mimetypes.guess_type(filepath)
     if not mime_type:
         mime_type = 'audio/flac' if filepath.lower().endswith('.flac') else 'audio/mpeg'
 
-    # Handle Partial Content Requests (Required for FLAC and Seeking)
-    if range_header:
-        match = re.search(r'bytes=(\d+)-(\d*)', range_header)
-        if match:
-            groups = match.groups()
-            byte1 = int(groups[0])
-            byte2 = int(groups[1]) if groups[1] else file_size - 1
-        else:
-            byte1, byte2 = 0, file_size - 1
-
-        length = byte2 - byte1 + 1
-
-        def generate():
-            with open(filepath, 'rb') as f:
-                f.seek(byte1)
-                chunk_size = 8192
-                remaining = length
-                while remaining > 0:
-                    data = f.read(min(chunk_size, remaining))
-                    if not data:
-                        break
-                    remaining -= len(data)
-                    yield data
-
-        rv = Response(generate(), 206, mimetype=mime_type, direct_passthrough=True)
-        rv.headers.add('Content-Range', f'bytes {byte1}-{byte2}/{file_size}')
-        rv.headers.add('Accept-Ranges', 'bytes')
-        rv.headers.add('Content-Length', str(length))
-        return rv
-        
-    else:
-        # Full File Stream
-        def generate():
-            with open(filepath, 'rb') as f:
-                while chunk := f.read(8192):
-                    yield chunk
-        rv = Response(generate(), 200, mimetype=mime_type, direct_passthrough=True)
-        rv.headers.add('Content-Length', str(file_size))
-        rv.headers.add('Accept-Ranges', 'bytes')
-        return rv
+    # Flask's send_file with conditional=True handles HTTP 206 Byte-Range natively and perfectly
+    return send_file(filepath, mimetype=mime_type, conditional=True)
 
 @app.route('/download/<path:filename>')
 def download(filename):
@@ -1991,6 +2210,9 @@ def download(filename):
     clean_filename = urllib.parse.unquote(filename).lstrip('/')
     filepath = os.path.normpath(os.path.join(MUSIC_DIR, clean_filename))
     
+    if not filepath.startswith(MUSIC_DIR):
+        return "Unauthorized", 403
+
     if not os.path.exists(filepath):
         return "Audio file not found", 404
         
@@ -2009,8 +2231,9 @@ def api_data():
 def api_radio():
     if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
     history_param = request.args.get('history', '')
+    current_artist = request.args.get('current_artist', '')
     history_list = [urllib.parse.unquote(x) for x in history_param.split(',')] if history_param else []
-    next_song_obj = get_radio_recommendation(session['user'], history_list)
+    next_song_obj = get_radio_recommendation(session['user'], history_list, current_artist)
     return jsonify({"song": next_song_obj})
 
 # --- PLAYLIST API ROUTES ---
