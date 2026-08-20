@@ -25,20 +25,18 @@ except ImportError:
 
 PORT = int(os.environ.get("PORT", 8000))
 
-# Your music files will be read directly from your GitHub repo
-MUSIC_DIR = os.environ.get("MUSIC_DIR", "./Music")
-os.makedirs(MUSIC_DIR, exist_ok=True)
-
-# DATA_DIR points to our persistent Railway Volume (if deployed)
+# DATA_DIR points to our persistent Railway Volume
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 
-# Save databases, profiles, and caches to the persistent volume
+# Move Music into DATA_DIR so uploaded files persist forever on Railway
+MUSIC_DIR = os.environ.get("MUSIC_DIR", os.path.join(DATA_DIR, "Music"))
 CACHE_DIR = os.path.join(DATA_DIR, "Cache_Art")
 PROFILES_DIR = os.path.join(DATA_DIR, "Profiles")
 DB_FILE = os.path.join(DATA_DIR, 'database.json')
-METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v7.json')
+METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v8.json')
 VIDEO_CACHE_FILE = os.path.join(DATA_DIR, 'videos_v2.json')
 
+os.makedirs(MUSIC_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(PROFILES_DIR, exist_ok=True)
 
@@ -416,7 +414,6 @@ HTML_TEMPLATE = """
         .playlist-select-item { padding: 12px 16px; background: #222; border-radius: 6px; margin-bottom: 8px; cursor: pointer; font-weight: 600; text-align: left; display: flex; justify-content: space-between; align-items: center; transition: 0.2s; }
         .playlist-select-item:hover { background: #2a2a2a; border-color: var(--accent); color: var(--accent); }
         
-        /* Social / Chat Styles */
         .social-container { display: flex; height: calc(100vh - 120px); gap: 20px; }
         .social-sidebar { width: 300px; background: #181818; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #282828; }
         .social-sidebar-header { padding: 16px; border-bottom: 1px solid #282828; }
@@ -1492,25 +1489,20 @@ HTML_TEMPLATE = """
                         <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700; margin-top:4px;">Save Customizations</button>
                     </form>
                 </div>
-
-                <div class="admin-card">
-                    <h3 style="margin-top:0; font-size:16px;">Change Password</h3>
-                    <form onsubmit="changePassword(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 350px;">
-                        <div>
-                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">Current Password</div>
-                            <input type="password" id="curr-pass" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
-                        </div>
-                        <div>
-                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">New Password</div>
-                            <input type="password" id="new-pass-user" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
-                        </div>
-                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700; margin-top:4px;">Update Password</button>
-                    </form>
-                </div>
             `;
 
             if (currentUserIsAdmin) {
                 html += `
+                <div class="admin-card" style="margin-bottom:24px; border: 1px solid var(--accent);">
+                    <h3 style="margin-top:0; font-size:16px; color:var(--accent)"><i class="fas fa-cloud-upload-alt"></i> Upload Music</h3>
+                    <p style="font-size:12px; color:var(--subtext); margin-top:0;">Upload MP3 or FLAC files directly to your server's persistent storage. (Upload in batches of 10-20 files for best results).</p>
+                    <form onsubmit="uploadMusic(event)" style="display:flex; flex-direction:column; gap:12px;">
+                        <input type="file" id="music-upload-input" accept="audio/mpeg, audio/flac, audio/ogg, audio/wav, audio/mp4" multiple style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
+                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700;">Upload Tracks</button>
+                    </form>
+                    <div id="upload-status" style="margin-top: 10px; font-size: 13px; font-weight: 600;"></div>
+                </div>
+
                 <h2 style="margin-top:40px;"><i class="fas fa-users-cog" style="color:var(--accent)"></i> User Management</h2>
                 <div class="admin-card">
                     <h3 style="margin-top:0; font-size:16px;">Create New Account</h3>
@@ -1533,9 +1525,53 @@ HTML_TEMPLATE = """
                 `;
             }
 
-            html += `</div>`;
+            html += `
+                <div class="admin-card">
+                    <h3 style="margin-top:0; font-size:16px;">Change Password</h3>
+                    <form onsubmit="changePassword(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 350px;">
+                        <div>
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">Current Password</div>
+                            <input type="password" id="curr-pass" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
+                        </div>
+                        <div>
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">New Password</div>
+                            <input type="password" id="new-pass-user" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
+                        </div>
+                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700; margin-top:4px;">Update Password</button>
+                    </form>
+                </div>
+            </div>`;
+            
             contentDiv.innerHTML = html;
             if (currentUserIsAdmin) loadUsersTable();
+        }
+
+        function uploadMusic(e) {
+            e.preventDefault();
+            let fileInput = document.getElementById('music-upload-input');
+            if (fileInput.files.length === 0) return alert("Select files first.");
+            
+            let formData = new FormData();
+            for(let i=0; i<fileInput.files.length; i++) {
+                formData.append('files', fileInput.files[i]);
+            }
+            
+            let status = document.getElementById('upload-status');
+            status.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Uploading ${fileInput.files.length} files... Do not close this page.`;
+            
+            fetch('/api/admin/upload', {
+                method: 'POST',
+                body: formData
+            }).then(res => res.json()).then(data => {
+                if(data.success) {
+                    status.innerHTML = `<span style="color:var(--accent)"><i class="fas fa-check"></i> Successfully uploaded ${data.saved} tracks! Reloading...</span>`;
+                    setTimeout(() => window.location.reload(), 1500);
+                } else {
+                    status.innerHTML = `<span style="color:#ff5555"><i class="fas fa-times"></i> ${data.error}</span>`;
+                }
+            }).catch(err => {
+                status.innerHTML = `<span style="color:#ff5555"><i class="fas fa-times"></i> Upload failed. Files might be too large.</span>`;
+            });
         }
 
         function changeUsername(e) {
@@ -1856,7 +1892,6 @@ def api_friends():
         if f in db["users"]:
             f_data = db["users"][f]
             np = f_data.get('now_playing')
-            # Clear now_playing if older than 2 hours to prevent stale statuses
             if np and (int(time.time()) - np.get('time', 0)) > 7200:
                 np = None
             friends_payload.append({
@@ -1980,7 +2015,28 @@ def api_feedback():
     save_db(db)
     return jsonify({"success": True})
 
-# --- PROFILE CUSTOMIZATION API ROUTES ---
+# --- PROFILE CUSTOMIZATION & UPLOAD API ROUTES ---
+@app.route('/api/admin/upload', methods=['POST'])
+def api_admin_upload():
+    if not session.get('is_admin'):
+        return jsonify({"error": "Unauthorized"}), 403
+
+    if 'files' not in request.files:
+        return jsonify({"error": "No files provided"}), 400
+        
+    files = request.files.getlist('files')
+    saved = 0
+    for file in files:
+        if file.filename:
+            filename = file.filename.replace('/', '').replace('\\', '')
+            filepath = os.path.join(MUSIC_DIR, filename)
+            file.save(filepath)
+            saved += 1
+            
+    global _meta_cache_dirty
+    _meta_cache_dirty = True
+    return jsonify({"success": True, "saved": saved})
+
 @app.route('/api/settings/username', methods=['POST'])
 def change_username_api():
     if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
