@@ -29,12 +29,25 @@
         "Ravyn Lenae - Love Me Not.mp3": 1,
         "Prince - Purple Rain (2015 Paisley Park Remaster).mp3": 1,
         "Chappell Roan - Pink Pony Club.mp3": 1,
-        "Linkin Park/00 - Linkin Park - A Place for My Head.flac": 4,
-        "Linkin Park/00 - Linkin Park - Bleed It Out.flac": 3,
+        "Linkin Park/00 - Linkin Park - A Place for My Head.flac": 12,
+        "Linkin Park/00 - Linkin Park - Bleed It Out.flac": 16,
         "Linkin Park/00 - Linkin Park - What I've Done.flac": 1,
-        "Linkin Park/00 - Linkin Park - Breaking the Habit.flac": 2,
-        "Linkin Park/00 - Linkin Park - Somewhere I Belong.flac": 1
-      }
+        "Linkin Park/00 - Linkin Park - Breaking the Habit.flac": 4,
+        "Linkin Park/00 - Linkin Park - Somewhere I Belong.flac": 3,
+        "Linkin Park/00 - Linkin Park - Numb _ Encore.flac": 3,
+        "Linkin Park/00 - Linkin Park - Given Up.flac": 3,
+        "Linkin Park/00 - Linkin Park - Faint.flac": 2,
+        "Linkin Park/00 - Linkin Park - Papercut.flac": 2,
+        "Linkin Park/00 - Linkin Park - New Divide.flac": 2
+      },
+      "is_admin": true
+    },
+    "KK": {
+      "password": "scrypt:32768:8:1$VpkAewRMwdtUrZCR$911c9949150fafc6486398251cbc7f9c0ece31c4bdf6d50f2a589eff2d3756544def53db3ce75bff541d296a755574debdc12deeb0a05504a8567a341c33d89d",
+      "is_admin": false,
+      "likes": [],
+      "dislikes": [],
+      "play_counts": {}
     }
   }
 }

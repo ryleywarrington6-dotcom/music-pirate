@@ -17,12 +17,14 @@ except ImportError:
     sys.exit(1)
 
 PORT = int(os.environ.get("PORT", 8000))
-MUSIC_DIR = "/workspaces/music-pirate/Music"
+# Use a relative path so it works locally and on Render securely
+MUSIC_DIR = os.environ.get("MUSIC_DIR", "./Music")
 os.makedirs(MUSIC_DIR, exist_ok=True) 
 
 DB_FILE = 'database.json'
 COVERS_FILE = 'covers_v7.json' 
 METADATA_FILE = 'metadata_v4.json'
+VIDEO_CACHE_FILE = 'videos_v1.json' 
 
 app = Flask(__name__)
 app.secret_key = 'super-secret-production-key-change-me'
@@ -44,6 +46,7 @@ def save_db(db): save_json_file(DB_FILE, db)
 
 cover_cache = load_json_file(COVERS_FILE, {})
 meta_cache = load_json_file(METADATA_FILE, {})
+video_cache = load_json_file(VIDEO_CACHE_FILE, {})
 
 def get_all_filepaths():
     audio_files = []
@@ -192,22 +195,48 @@ def get_aggregated_stats():
             if song in stats: stats[song]["plays"] += count
     return stats
 
-def get_radio_recommendation(username):
+def get_radio_recommendation(username, history_list=None):
     db = load_db()
     user = db["users"].get(username, {})
     likes = set(user.get("likes", []))
     dislikes = set(user.get("dislikes", []))
     play_counts = user.get("play_counts", {})
     all_files = get_all_filepaths()
-    valid_songs = [s for s in all_files if s not in dislikes]
-    if not valid_songs: return random.choice(all_files) if all_files else None
+    
+    history_list = history_list or []
+    history_set = set(history_list)
+    
+    valid_songs = [s for s in all_files if s not in dislikes and s not in history_set]
+    
+    if not valid_songs: 
+        valid_songs = [s for s in all_files if s not in dislikes]
+    if not valid_songs: 
+        return get_song_metadata(random.choice(all_files)) if all_files else None
+
+    last_artist = None
+    if history_list:
+        last_song = history_list[-1]
+        last_artist = get_song_metadata(last_song).get("artist")
 
     weights = []
     for song in valid_songs:
-        weight = 1.0 
-        if song in likes: weight += 5.0 
-        weight += (play_counts.get(song, 0) * 0.2) 
+        weight = 10.0 
+        
+        if song in likes: 
+            weight += 30.0 
+            
+        plays = play_counts.get(song, 0)
+        if plays == 0:
+            weight += 15.0 
+        elif plays > 0:
+            weight += min(plays * 2.0, 20.0) 
+            
+        meta = get_song_metadata(song)
+        if last_artist and meta['artist'] == last_artist:
+            weight += 12.0 
+            
         weights.append(weight)
+        
     recommended_filename = random.choices(valid_songs, weights=weights, k=1)[0]
     return get_song_metadata(recommended_filename)
 
@@ -249,11 +278,13 @@ HTML_TEMPLATE = """
         /* Right Sidebar Panel */
         .right-panel { width: 340px; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; padding: 24px; display: none; flex-direction: column; align-items: center; text-align: center; overflow: hidden; transition: 0.3s; flex-shrink: 0; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
         
-        /* Ambient Cover Art Glow */
-        .rp-cover-wrapper { position: relative; width: 220px; height: 220px; margin: 15px 0 25px 0; }
+        /* Cover Art & Music Video Canvas Glow */
+        .rp-media-container { position: relative; width: 220px; height: 220px; margin: 15px 0 25px 0; }
         .rp-cover-glow { position: absolute; top: 10%; left: 10%; width: 80%; height: 80%; filter: blur(35px); opacity: 0.65; z-index: 1; transition: background-image 0.5s ease; background-size: cover; background-position: center; border-radius: 50%; }
-        #rp-cover { position: relative; z-index: 2; width: 100%; height: 100%; border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.7); object-fit: cover; }
-        
+        #rp-cover { position: absolute; z-index: 2; top:0; left:0; width: 100%; height: 100%; border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.7); object-fit: cover; transition: opacity 0.5s ease; }
+        #rp-video-container { position: absolute; top:0; left:0; width:100%; height:100%; border-radius: 8px; overflow: hidden; z-index: 3; opacity: 0; transition: opacity 0.5s; pointer-events: none; box-shadow: 0 12px 30px rgba(0,0,0,0.7); }
+        #rp-video { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 600px; height: 337px; }
+
         /* High-Res Visualizer Canvas */
         #visualizer { width: 100%; height: 50px; display: block; filter: drop-shadow(0px 0px 8px rgba(29, 185, 84, 0.5)); margin-top: 5px; }
 
@@ -298,7 +329,7 @@ HTML_TEMPLATE = """
         
         /* Bottom Player Controls */
         .now-playing-info { width: 28%; display: flex; align-items: center; gap: 14px; }
-        .np-cover { width: 56px; height: 56px; background: #222; border-radius: 6px; object-fit: cover; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+        .np-cover { width: 56px; height: 56px; background: #222; border-radius: 6px; object-fit: cover; box-shadow: 0 4px 12px rgba(0,0,0,0.5); cursor: pointer;}
         .np-text { display: flex; flex-direction: column; overflow: hidden; }
         .np-title { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .np-artist { color: var(--subtext); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
@@ -323,11 +354,15 @@ HTML_TEMPLATE = """
         input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #fff; opacity: 0; transition: 0.1s; box-shadow: 0 2px 4px rgba(0,0,0,0.5); }
         input[type=range]:hover::-webkit-slider-thumb { opacity: 1; }
         
-        /* Perfected Lyrics Container */
+        /* NEW LYRICS UI WITH BOUNCING WORDS */
         .lyrics-container { position: relative; width: 100%; flex: 1; overflow-y: auto; text-align: left; padding-top: 20px; padding-bottom: 80px; scroll-behavior: smooth; mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); }
         .lyric-line { font-size: 17px; color: rgba(255, 255, 255, 0.35); padding: 8px 12px; margin: 4px 0; border-radius: 6px; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); font-weight: 600; cursor: pointer; transform-origin: left center; }
         .lyric-line:hover { color: rgba(255, 255, 255, 0.8); background: rgba(255,255,255,0.03); }
+        
         .lyric-line.active { color: var(--accent); font-size: 21px; font-weight: 700; text-shadow: 0 0 15px rgba(29, 185, 84, 0.4); transform: translateX(4px); opacity: 1; }
+        
+        .lyric-word { transition: all 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275); display: inline-block; }
+        .lyric-word.active-word { color: #ff9500 !important; text-shadow: 0 0 18px rgba(255, 149, 0, 0.9) !important; transform: scale(1.15) translateY(-2px); }
         
         .admin-card { background: #181818; border: 1px solid #282828; border-radius: 10px; padding: 24px; margin-bottom: 24px; max-width: 700px; }
         .admin-table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14px; text-align: left; }
@@ -417,9 +452,13 @@ HTML_TEMPLATE = """
             </div>
         </div>
         
-        <div class="rp-cover-wrapper">
+        <!-- YOUTUBE OVERLAY CONTAINER WITH ERROR 153 FIX -->
+        <div class="rp-media-container">
             <div class="rp-cover-glow" id="rp-cover-glow"></div>
             <img id="rp-cover" src="" alt="">
+            <div id="rp-video-container">
+                <iframe id="rp-video" src="" frameborder="0" allow="autoplay; encrypted-media" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+            </div>
         </div>
 
         <div id="rp-title" style="font-size: 20px; font-weight: 700; margin-bottom: 4px; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></div>
@@ -435,7 +474,7 @@ HTML_TEMPLATE = """
     <!-- BOTTOM PLAYER BAR -->
     <div class="player-bar">
         <div class="now-playing-info">
-            <img id="np-cover" class="np-cover" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" alt="Cover">
+            <img id="np-cover" class="np-cover" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" alt="Cover" onclick="document.querySelector('.right-panel').style.display='flex'">
             <div class="np-text">
                 <div class="np-title" id="np-title">No track selected</div>
                 <div class="np-artist" id="np-artist">-</div>
@@ -444,13 +483,13 @@ HTML_TEMPLATE = """
         
         <div class="controls">
             <div class="buttons">
-                <button class="btn" id="shuffle-btn" onclick="toggleShuffle()"><i class="fas fa-random"></i></button>
-                <button class="btn" onclick="prevTrack()"><i class="fas fa-step-backward"></i></button>
-                <button class="btn play-btn" id="play-btn-wrapper" onclick="togglePlay()">
+                <button class="btn" id="shuffle-btn" onclick="toggleShuffle()" title="Shuffle"><i class="fas fa-random"></i></button>
+                <button class="btn" onclick="prevTrack()" title="Previous Track"><i class="fas fa-step-backward"></i></button>
+                <button class="btn play-btn" id="play-btn-wrapper" onclick="togglePlay()" title="Play / Pause (Space)">
                     <i class="fas fa-play" id="play-icon" style="margin-left: 2px;"></i>
                 </button>
-                <button class="btn" onclick="nextTrack()"><i class="fas fa-step-forward"></i></button>
-                <button class="btn" id="repeat-btn" onclick="toggleRepeat()"><i class="fas fa-redo"></i></button>
+                <button class="btn" onclick="nextTrack()" title="Next Track"><i class="fas fa-step-forward"></i></button>
+                <button class="btn" id="repeat-btn" onclick="toggleRepeat()" title="Repeat"><i class="fas fa-redo"></i></button>
             </div>
             <div style="width: 100%; display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--subtext); font-weight:500;">
                 <span id="time-current">0:00</span>
@@ -464,7 +503,7 @@ HTML_TEMPLATE = """
             <button class="btn" id="dislike-btn" onclick="sendFeedback('dislike')"><i class="fas fa-thumbs-down"></i></button>
             <button class="btn" id="like-btn" onclick="sendFeedback('like')" style="margin-right:10px;"><i class="fas fa-heart"></i></button>
             <i class="fas fa-volume-up" id="mute-icon" onclick="toggleMute()" style="cursor:pointer; width:16px;"></i>
-            <input type="range" id="volume-bar" value="100" max="100" style="width: 90px;">
+            <input type="range" id="volume-bar" value="100" max="100" style="width: 90px;" title="Volume (Up/Down Arrows)">
         </div>
     </div>
 
@@ -477,6 +516,7 @@ HTML_TEMPLATE = """
         let currentQueue = [];
         let originalQueue = [];
         let currentIndex = 0;
+        let radioHistory = []; 
         let isRadioMode = false;
         let isShuffle = false;
         let isRepeat = false;
@@ -502,6 +542,25 @@ HTML_TEMPLATE = """
         const timeCurrentEl = document.getElementById('time-current');
         const timeTotalEl = document.getElementById('time-total');
         const lyricsContainer = document.getElementById('lyrics-container');
+
+        // KEYBOARD SHORTCUTS
+        document.addEventListener('keydown', (e) => {
+            if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+            
+            if(e.code === 'Space') { e.preventDefault(); togglePlay(); }
+            if(e.code === 'ArrowRight') { e.preventDefault(); nextTrack(); }
+            if(e.code === 'ArrowLeft') { e.preventDefault(); prevTrack(); }
+            if(e.code === 'ArrowUp') {
+                e.preventDefault();
+                volumeBar.value = Math.min(100, parseInt(volumeBar.value) + 10);
+                volumeBar.dispatchEvent(new Event('input'));
+            }
+            if(e.code === 'ArrowDown') {
+                e.preventDefault();
+                volumeBar.value = Math.max(0, parseInt(volumeBar.value) - 10);
+                volumeBar.dispatchEvent(new Event('input'));
+            }
+        });
 
         function initVisualizer() {
             if (visualizerInitialized) return;
@@ -587,6 +646,33 @@ HTML_TEMPLATE = """
             return `/api/cover?artist=${encodeURIComponent(song.artist)}&song=${encodeURIComponent(song.title)}&file=${encodeURIComponent(song.filename)}`;
         }
 
+        function updateMediaSession(songObj, coverUrl) {
+            if ('mediaSession' in navigator) {
+                navigator.mediaSession.metadata = new MediaMetadata({
+                    title: songObj.title,
+                    artist: songObj.artist,
+                    album: 'Streamer Pro',
+                    artwork: [ { src: coverUrl, sizes: '500x500', type: 'image/jpeg' } ]
+                });
+
+                navigator.mediaSession.setActionHandler('play', () => { audio.play(); });
+                navigator.mediaSession.setActionHandler('pause', () => { audio.pause(); });
+                navigator.mediaSession.setActionHandler('previoustrack', prevTrack);
+                navigator.mediaSession.setActionHandler('nexttrack', nextTrack);
+            }
+        }
+
+        function controlYouTube(command) {
+            let iframe = document.getElementById('rp-video');
+            if (iframe && iframe.contentWindow) {
+                iframe.contentWindow.postMessage(JSON.stringify({
+                    "event": "command",
+                    "func": command,
+                    "args": ""
+                }), '*');
+            }
+        }
+
         audio.addEventListener('play', () => {
             initVisualizer();
             if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
@@ -596,6 +682,7 @@ HTML_TEMPLATE = """
             playIcon.style.marginLeft = '0';
             eqAnim.classList.remove('paused');
             eqAnim.classList.add('playing');
+            controlYouTube('playVideo');
         });
         
         audio.addEventListener('pause', () => {
@@ -603,6 +690,7 @@ HTML_TEMPLATE = """
             playIcon.classList.add('fa-play');
             playIcon.style.marginLeft = '2px';
             eqAnim.classList.add('paused');
+            controlYouTube('pauseVideo');
         });
 
         audio.addEventListener('loadedmetadata', () => {
@@ -626,7 +714,10 @@ HTML_TEMPLATE = """
                 if (newIndex !== activeLyricIndex && newIndex >= 0) {
                     if (activeLyricIndex >= 0) {
                         const oldEl = document.getElementById(`lyric-${activeLyricIndex}`);
-                        if (oldEl) oldEl.classList.remove('active');
+                        if (oldEl) {
+                            oldEl.classList.remove('active');
+                            oldEl.querySelectorAll('.lyric-word').forEach(w => w.classList.remove('active-word'));
+                        }
                     }
                     activeLyricIndex = newIndex;
                     const newEl = document.getElementById(`lyric-${activeLyricIndex}`);
@@ -638,6 +729,34 @@ HTML_TEMPLATE = """
                             top: newEl.offsetTop - containerHalf + lineHalf,
                             behavior: 'smooth'
                         });
+                    }
+                }
+
+                // Word Tracker - Character Weighted
+                if (activeLyricIndex >= 0) {
+                    const line = syncedLyrics[activeLyricIndex];
+                    if (line.words.length > 0) {
+                        const elapsed = audio.currentTime - line.time;
+                        let progress = elapsed / line.duration;
+                        
+                        if (progress < 0) progress = 0;
+                        if (progress > 1) progress = 1;
+
+                        let wordIndex = line.wordTimings.findIndex(wt => progress >= wt.startPercent && progress <= wt.endPercent);
+                        if (wordIndex === -1 && progress >= 1) wordIndex = line.words.length - 1;
+                        if (wordIndex === -1 && progress <= 0) wordIndex = 0;
+
+                        const activeLineEl = document.getElementById(`lyric-${activeLyricIndex}`);
+                        if (activeLineEl) {
+                            const wordSpans = activeLineEl.querySelectorAll('.lyric-word');
+                            wordSpans.forEach((span, idx) => {
+                                if (idx === wordIndex) {
+                                    if (!span.classList.contains('active-word')) span.classList.add('active-word');
+                                } else {
+                                    if (span.classList.contains('active-word')) span.classList.remove('active-word');
+                                }
+                            });
+                        }
                     }
                 }
             }
@@ -931,6 +1050,7 @@ HTML_TEMPLATE = """
 
         function startRadio() {
             isRadioMode = true;
+            radioHistory = []; 
             contentDiv.innerHTML = `
                 <div class="fade-in" style="text-align:center; margin-top: 100px;">
                     <i class="fas fa-broadcast-tower" style="font-size: 80px; color: var(--accent); margin-bottom: 20px;"></i>
@@ -943,11 +1063,19 @@ HTML_TEMPLATE = """
 
         function loadSong(songObj) {
             currentSongObj = songObj;
+            
+            if (isRadioMode) {
+                radioHistory.push(songObj.filename);
+                if (radioHistory.length > 10) radioHistory.shift();
+            }
+
             audio.src = '/play/' + encodeURIComponent(songObj.filename);
             audio.play();
             
             rightPanel.style.display = 'flex';
             let coverUrl = getCoverUrl(songObj);
+            
+            document.title = "▶ " + songObj.title + " - " + songObj.artist;
             
             document.getElementById('np-title').innerText = songObj.title;
             document.getElementById('np-artist').innerText = songObj.artist;
@@ -955,12 +1083,33 @@ HTML_TEMPLATE = """
 
             document.getElementById('rp-title').innerText = songObj.title;
             document.getElementById('rp-artist').innerText = songObj.artist;
-            document.getElementById('rp-cover').src = coverUrl;
             
+            document.getElementById('rp-video-container').style.opacity = '0';
+            document.getElementById('rp-video').src = '';
+            document.getElementById('rp-cover').src = coverUrl;
+            document.getElementById('rp-cover').style.opacity = '1';
             document.getElementById('rp-cover-glow').style.backgroundImage = `url('${coverUrl}')`;
             
+            updateMediaSession(songObj, coverUrl);
             fetchStatusAndLog(songObj.filename);
             fetchLyrics(songObj.artist, songObj.title);
+            
+            const currentOrigin = encodeURIComponent(window.location.origin);
+            
+            fetch(`/api/video?artist=${encodeURIComponent(songObj.artist)}&song=${encodeURIComponent(songObj.title)}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.youtube_id && currentSongObj.filename === songObj.filename) {
+                        const vidUrl = `https://www.youtube-nocookie.com/embed/${data.youtube_id}?autoplay=1&mute=1&controls=0&loop=1&playlist=${data.youtube_id}&modestbranding=1&showinfo=0&disablekb=1&enablejsapi=1&origin=${currentOrigin}`;
+                        document.getElementById('rp-video').src = vidUrl;
+                        
+                        setTimeout(() => {
+                            if(currentSongObj.filename === songObj.filename) {
+                                document.getElementById('rp-video-container').style.opacity = '1';
+                            }
+                        }, 1800);
+                    }
+                });
         }
 
         function fetchLyrics(artist, track) {
@@ -993,17 +1142,44 @@ HTML_TEMPLATE = """
                 const match = line.match(regex);
                 if (match) {
                     const time = (parseInt(match[1]) * 60) + parseFloat(match[2]);
-                    const text = match[3].trim() || '♪';
-                    syncedLyrics.push({ time, text });
+                    const text = match[3].trim();
+                    if (text !== '') {
+                        const words = text.split(' ').filter(w => w !== '');
+                        syncedLyrics.push({ time, text, words });
+                    }
                 }
             });
+
+            for (let i = 0; i < syncedLyrics.length; i++) {
+                let gap = 5.0;
+                if (i < syncedLyrics.length - 1) {
+                    gap = syncedLyrics[i+1].time - syncedLyrics[i].time;
+                }
+                
+                syncedLyrics[i].duration = Math.min(gap, Math.max(1.5, syncedLyrics[i].words.length * 0.45));
+                
+                let totalChars = syncedLyrics[i].words.reduce((sum, w) => sum + w.length, 0);
+                let charAcc = 0;
+                syncedLyrics[i].wordTimings = syncedLyrics[i].words.map(w => {
+                    let startPercent = charAcc / totalChars;
+                    charAcc += w.length;
+                    let endPercent = charAcc / totalChars;
+                    return { startPercent, endPercent };
+                });
+            }
 
             lyricsContainer.innerHTML = '';
             syncedLyrics.forEach((line, index) => {
                 const el = document.createElement('div');
                 el.className = 'lyric-line';
                 el.id = `lyric-${index}`;
-                el.innerText = line.text;
+                
+                let wordsHTML = '';
+                line.words.forEach((word, wIndex) => {
+                    wordsHTML += `<span class="lyric-word" id="word-${index}-${wIndex}">${word}</span> `;
+                });
+                el.innerHTML = wordsHTML;
+                
                 el.onclick = () => { audio.currentTime = line.time; audio.play(); };
                 lyricsContainer.appendChild(el);
             });
@@ -1026,7 +1202,12 @@ HTML_TEMPLATE = """
 
         function nextTrack() {
             if (isRadioMode) {
-                fetch('/api/radio/next').then(res => res.json()).then(data => loadSong(data.song));
+                const historyParam = radioHistory.map(encodeURIComponent).join(',');
+                fetch('/api/radio/next?history=' + historyParam)
+                    .then(res => res.json())
+                    .then(data => {
+                        if(data.song) loadSong(data.song);
+                    });
             } else if (currentQueue.length > 0) {
                 if (isRepeat) {
                     audio.currentTime = 0;
@@ -1103,7 +1284,6 @@ def index():
     db = load_db()
     users = db.get("users", {})
     
-    # --- LEGACY DATABASE MIGRATION ---
     if users:
         has_admin = any(u.get("is_admin", False) for u in users.values())
         if not has_admin:
@@ -1130,7 +1310,6 @@ def index():
                 return redirect(url_for('index'))
         return render_template_string(HTML_TEMPLATE, logged_in=False, setup=False)
         
-    # Auto-heal session in case of old cookies
     current_user_data = users.get(session['user'], {})
     is_admin = current_user_data.get('is_admin', False)
     session['is_admin'] = is_admin
@@ -1157,7 +1336,11 @@ def api_data():
 @app.route('/api/radio/next')
 def api_radio():
     if 'user' not in session: return jsonify({})
-    next_song_obj = get_radio_recommendation(session['user'])
+    
+    history_param = request.args.get('history', '')
+    history_list = [urllib.parse.unquote(x) for x in history_param.split(',')] if history_param else []
+    
+    next_song_obj = get_radio_recommendation(session['user'], history_list)
     return jsonify({"song": next_song_obj})
 
 @app.route('/api/status')
@@ -1311,6 +1494,38 @@ def api_cover():
     cover_cache[cache_key] = fallback_svg
     save_covers(cover_cache)
     return redirect(fallback_svg)
+
+@app.route('/api/video')
+def api_video():
+    artist = request.args.get('artist', '').strip()
+    song = request.args.get('song', '').strip()
+    
+    if not artist or artist == "Unknown Artist":
+        return jsonify({"youtube_id": None})
+        
+    cache_key = f"{artist} | {song}"
+    if cache_key in video_cache:
+        return jsonify({"youtube_id": video_cache[cache_key]})
+
+    query = f"{artist} {song} official music video"
+    url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
+    
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            html = resp.read().decode('utf-8')
+            match = re.search(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+            if match:
+                vid = match.group(1)
+                video_cache[cache_key] = vid
+                save_json_file(VIDEO_CACHE_FILE, video_cache)
+                return jsonify({"youtube_id": vid})
+    except Exception:
+        pass
+    
+    video_cache[cache_key] = None
+    save_json_file(VIDEO_CACHE_FILE, video_cache)
+    return jsonify({"youtube_id": None})
 
 @app.route('/local_cover/<path:filename>')
 def local_cover(filename):
