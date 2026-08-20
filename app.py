@@ -25,50 +25,24 @@ except ImportError:
 
 PORT = int(os.environ.get("PORT", 8000))
 
-# DATA_DIR points to persistent Railway Volume
-DATA_DIR = os.environ.get("DATA_DIR", ".")
+# --- STRICT GITHUB DIRECTORY PATHING ---
+# Forces the app to read strictly from the ./Music folder in your repository
+MUSIC_DIR = os.path.abspath(os.environ.get("MUSIC_DIR", "./Music"))
+os.makedirs(MUSIC_DIR, exist_ok=True)
 
-# Set up directory paths
-MUSIC_DIR = os.environ.get("MUSIC_DIR", os.path.join(DATA_DIR, "Music"))
+# DATA_DIR points to persistent Railway Volume for databases
+DATA_DIR = os.environ.get("DATA_DIR", ".")
 CACHE_DIR = os.path.join(DATA_DIR, "Cache_Art")
 PROFILES_DIR = os.path.join(DATA_DIR, "Profiles")
 DB_FILE = os.path.join(DATA_DIR, 'database.json')
-METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v8.json')
+METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v9.json')
 VIDEO_CACHE_FILE = os.path.join(DATA_DIR, 'videos_v2.json')
 
-os.makedirs(MUSIC_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(PROFILES_DIR, exist_ok=True)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(32).hex())
-
-# ---------------------------------------------------------
-# PATH RESOLUTION & DUAL-DIRECTORY HELPERS
-# ---------------------------------------------------------
-def resolve_audio_path(rel_path):
-    """Checks persistent storage first, then falls back to repository ./Music folder."""
-    p1 = os.path.join(MUSIC_DIR, rel_path)
-    if os.path.exists(p1):
-        return p1
-    p2 = os.path.join("./Music", rel_path)
-    if os.path.exists(p2):
-        return p2
-    return p1
-
-def get_all_filepaths():
-    """Scans both DATA_DIR/Music and ./Music to ensure all tracks are found."""
-    audio_files = set()
-    scan_dirs = [MUSIC_DIR, "./Music"]
-    for folder in scan_dirs:
-        if os.path.exists(folder):
-            for root, dirs, files in os.walk(folder):
-                for file in files:
-                    if file.lower().endswith(('.mp3', '.flac', '.ogg', '.m4a', '.wav')):
-                        full_path = os.path.join(root, file)
-                        rel_path = os.path.relpath(full_path, folder).replace(os.sep, '/')
-                        audio_files.add(rel_path)
-    return sorted(list(audio_files))
 
 # ---------------------------------------------------------
 # DATABASE & CACHE HELPERS
@@ -102,6 +76,18 @@ def _save_meta_cache():
         _meta_cache_dirty = False
 
 atexit.register(_save_meta_cache)
+
+def get_all_filepaths():
+    """Scans the Github ./Music folder for any audio files inside artist subfolders"""
+    audio_files = []
+    if os.path.exists(MUSIC_DIR):
+        for root, dirs, files in os.walk(MUSIC_DIR):
+            for file in files:
+                if file.lower().endswith(('.mp3', '.flac', '.ogg', '.m4a', '.wav')):
+                    full_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(full_path, MUSIC_DIR).replace(os.sep, '/')
+                    audio_files.append(rel_path)
+    return sorted(audio_files)
 
 def has_embedded_art(filepath):
     try:
@@ -189,7 +175,7 @@ def extract_audio_tags(full_path, rel_path):
     return artist, title
 
 def get_song_metadata(rel_path):
-    full_path = resolve_audio_path(rel_path)
+    full_path = os.path.join(MUSIC_DIR, rel_path)
     mtime = os.path.getmtime(full_path) if os.path.exists(full_path) else 0
 
     if rel_path in meta_cache:
@@ -370,7 +356,6 @@ HTML_TEMPLATE = """
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .fade-in { animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         
-        /* Right Panel Layout */
         .right-panel { width: 340px; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; padding: 24px; display: none; flex-direction: column; text-align: center; overflow: hidden; transition: 0.3s; flex-shrink: 0; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
         .rp-header-row { display: flex; justify-content: space-between; width: 100%; align-items: center; margin-bottom: 16px;}
         .rp-tabs { display: flex; gap: 8px; background: #1a1a1a; padding: 4px; border-radius: 20px; }
@@ -436,7 +421,6 @@ HTML_TEMPLATE = """
         .btn.active#dislike-btn i { color: #ff5555 !important; }
         .btn.play-btn { background: var(--text); color: var(--bg); height: 34px; width: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: transform 0.2s; }
         .btn.play-btn:hover { transform: scale(1.08); color: var(--bg); }
-        /* Removed crossorigin="anonymous" to fix session cookies */
         audio { display: none; }
         input[type=range] { -webkit-appearance: none; background: #4d4d4d; height: 4px; border-radius: 2px; outline: none; cursor: pointer; width: 100%; transition: 0.1s; }
         input[type=range]:hover { height: 6px; }
@@ -1516,20 +1500,25 @@ HTML_TEMPLATE = """
                         <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700; margin-top:4px;">Save Customizations</button>
                     </form>
                 </div>
+
+                <div class="admin-card">
+                    <h3 style="margin-top:0; font-size:16px;">Change Password</h3>
+                    <form onsubmit="changePassword(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 350px;">
+                        <div>
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">Current Password</div>
+                            <input type="password" id="curr-pass" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
+                        </div>
+                        <div>
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">New Password</div>
+                            <input type="password" id="new-pass-user" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
+                        </div>
+                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700; margin-top:4px;">Update Password</button>
+                    </form>
+                </div>
             `;
 
             if (currentUserIsAdmin) {
                 html += `
-                <div class="admin-card" style="margin-bottom:24px; border: 1px solid var(--accent);">
-                    <h3 style="margin-top:0; font-size:16px; color:var(--accent)"><i class="fas fa-cloud-upload-alt"></i> Upload Music</h3>
-                    <p style="font-size:12px; color:var(--subtext); margin-top:0;">Upload MP3 or FLAC files directly to your server's persistent storage.</p>
-                    <form onsubmit="uploadMusic(event)" style="display:flex; flex-direction:column; gap:12px;">
-                        <input type="file" id="music-upload-input" accept="audio/mpeg, audio/flac, audio/ogg, audio/wav, audio/mp4" multiple style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
-                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700;">Upload Tracks</button>
-                    </form>
-                    <div id="upload-status" style="margin-top: 10px; font-size: 13px; font-weight: 600;"></div>
-                </div>
-
                 <h2 style="margin-top:40px;"><i class="fas fa-users-cog" style="color:var(--accent)"></i> User Management</h2>
                 <div class="admin-card">
                     <h3 style="margin-top:0; font-size:16px;">Create New Account</h3>
@@ -1552,53 +1541,9 @@ HTML_TEMPLATE = """
                 `;
             }
 
-            html += `
-                <div class="admin-card">
-                    <h3 style="margin-top:0; font-size:16px;">Change Password</h3>
-                    <form onsubmit="changePassword(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 350px;">
-                        <div>
-                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">Current Password</div>
-                            <input type="password" id="curr-pass" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
-                        </div>
-                        <div>
-                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">New Password</div>
-                            <input type="password" id="new-pass-user" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
-                        </div>
-                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700; margin-top:4px;">Update Password</button>
-                    </form>
-                </div>
-            </div>`;
-            
+            html += `</div>`;
             contentDiv.innerHTML = html;
             if (currentUserIsAdmin) loadUsersTable();
-        }
-
-        function uploadMusic(e) {
-            e.preventDefault();
-            let fileInput = document.getElementById('music-upload-input');
-            if (fileInput.files.length === 0) return alert("Select files first.");
-            
-            let formData = new FormData();
-            for(let i=0; i<fileInput.files.length; i++) {
-                formData.append('files', fileInput.files[i]);
-            }
-            
-            let status = document.getElementById('upload-status');
-            status.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Uploading ${fileInput.files.length} files... Do not close this page.`;
-            
-            fetch('/api/admin/upload', {
-                method: 'POST',
-                body: formData
-            }).then(res => res.json()).then(data => {
-                if(data.success) {
-                    status.innerHTML = `<span style="color:var(--accent)"><i class="fas fa-check"></i> Successfully uploaded ${data.saved} tracks! Reloading...</span>`;
-                    setTimeout(() => window.location.reload(), 1500);
-                } else {
-                    status.innerHTML = `<span style="color:#ff5555"><i class="fas fa-times"></i> ${data.error}</span>`;
-                }
-            }).catch(err => {
-                status.innerHTML = `<span style="color:#ff5555"><i class="fas fa-times"></i> Upload failed. Files might be too large.</span>`;
-            });
         }
 
         function changeUsername(e) {
@@ -1818,25 +1763,12 @@ def logout():
 @app.route('/play/<path:filename>')
 def play(filename):
     if 'user' not in session: return "Unauthorized", 401
-    
-    # Safely route the file from the Persistent Volume OR Local Github folder
-    if os.path.exists(os.path.join(MUSIC_DIR, filename)):
-        return send_from_directory(MUSIC_DIR, filename)
-    elif os.path.exists(os.path.join("./Music", filename)):
-        return send_from_directory(os.path.abspath("./Music"), filename)
-        
-    return "Audio file not found", 404
+    return send_from_directory(MUSIC_DIR, filename)
 
 @app.route('/download/<path:filename>')
 def download(filename):
     if 'user' not in session: return "Unauthorized", 401
-    
-    if os.path.exists(os.path.join(MUSIC_DIR, filename)):
-        return send_from_directory(MUSIC_DIR, filename, as_attachment=True)
-    elif os.path.exists(os.path.join("./Music", filename)):
-        return send_from_directory(os.path.abspath("./Music"), filename, as_attachment=True)
-        
-    return "Audio file not found", 404
+    return send_from_directory(MUSIC_DIR, filename, as_attachment=True)
 
 @app.route('/api/data')
 def api_data():
@@ -1924,7 +1856,7 @@ def public_playlist_view(token):
     if token not in playlists: return "Playlist not found", 404
 
     pl = playlists[token]
-    songs = [get_song_metadata(f) for f in pl['songs'] if os.path.exists(resolve_audio_path(f))]
+    songs = [get_song_metadata(f) for f in pl['songs'] if os.path.exists(os.path.join(MUSIC_DIR, f))]
     return render_template_string(PUBLIC_PLAYLIST_TEMPLATE, playlist=pl, songs=songs)
 
 # --- SOCIAL & MESSAGING API ROUTES ---
@@ -2066,28 +1998,7 @@ def api_feedback():
     save_db(db)
     return jsonify({"success": True})
 
-# --- PROFILE CUSTOMIZATION & UPLOAD API ROUTES ---
-@app.route('/api/admin/upload', methods=['POST'])
-def api_admin_upload():
-    if not session.get('is_admin'):
-        return jsonify({"error": "Unauthorized"}), 403
-
-    if 'files' not in request.files:
-        return jsonify({"error": "No files provided"}), 400
-        
-    files = request.files.getlist('files')
-    saved = 0
-    for file in files:
-        if file.filename:
-            filename = file.filename.replace('/', '').replace('\\', '')
-            filepath = os.path.join(MUSIC_DIR, filename)
-            file.save(filepath)
-            saved += 1
-            
-    global _meta_cache_dirty
-    _meta_cache_dirty = True
-    return jsonify({"success": True, "saved": saved})
-
+# --- PROFILE CUSTOMIZATION API ROUTES ---
 @app.route('/api/settings/username', methods=['POST'])
 def change_username_api():
     if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
@@ -2219,7 +2130,7 @@ def admin_users_api():
 @app.route('/api/cover')
 def api_cover():
     filename = request.args.get('file', '')
-    filepath = resolve_audio_path(filename)
+    filepath = os.path.join(MUSIC_DIR, filename)
 
     if os.path.exists(filepath):
         try:
