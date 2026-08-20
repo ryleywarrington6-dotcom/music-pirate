@@ -40,7 +40,9 @@
         "Linkin Park/00 - Linkin Park - Papercut.flac": 2,
         "Linkin Park/00 - Linkin Park - New Divide.flac": 2
       },
-      "is_admin": true
+      "is_admin": true,
+      "bg_color": "#0f244d",
+      "pfp": "/Profiles/pfp_4200fbeb.jpg"
     },
     "KK": {
       "password": "scrypt:32768:8:1$VpkAewRMwdtUrZCR$911c9949150fafc6486398251cbc7f9c0ece31c4bdf6d50f2a589eff2d3756544def53db3ce75bff541d296a755574debdc12deeb0a05504a8567a341c33d89d",

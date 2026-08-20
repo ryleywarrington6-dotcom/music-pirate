@@ -5,6 +5,7 @@ import random
 import re
 import uuid
 import hashlib
+import time
 import urllib.request
 import urllib.parse
 import atexit
@@ -36,15 +37,13 @@ METADATA_FILE = 'metadata_v7.json'
 VIDEO_CACHE_FILE = 'videos_v2.json'
 
 app = Flask(__name__)
-# Use a persistent random key if not set
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(32).hex())
 
 # ---------------------------------------------------------
 # DATABASE & CACHE HELPERS
 # ---------------------------------------------------------
 def load_json_file(filepath, default_data):
-    if not os.path.exists(filepath):
-        return default_data
+    if not os.path.exists(filepath): return default_data
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -56,7 +55,7 @@ def save_json_file(filepath, data):
         json.dump(data, f, indent=2)
 
 def load_db():
-    return load_json_file(DB_FILE, {"users": {}, "playlists": {}})
+    return load_json_file(DB_FILE, {"users": {}, "playlists": {}, "messages": {}})
 
 def save_db(db):
     save_json_file(DB_FILE, db)
@@ -87,16 +86,12 @@ def get_all_filepaths():
 def has_embedded_art(filepath):
     try:
         audio = mutagen.File(filepath)
-        if audio is None:
-            return False
+        if audio is None: return False
         if hasattr(audio, 'tags') and audio.tags:
             for key in audio.tags.keys():
-                if key.startswith('APIC'):
-                    return True
-        if hasattr(audio, 'pictures') and audio.pictures:
-            return True
-    except Exception:
-        pass
+                if key.startswith('APIC'): return True
+        if hasattr(audio, 'pictures') and audio.pictures: return True
+    except Exception: pass
     return False
 
 def parse_folder_and_filename(rel_path):
@@ -110,7 +105,7 @@ def parse_folder_and_filename(rel_path):
 
     base = os.path.splitext(filename)[0]
     base = re.sub(r'^\s*\d{1,3}[\s.-]+', '', base)
-
+    
     file_parts = re.split(r'\s*[-–—]\s*', base, maxsplit=1)
     if len(file_parts) >= 2:
         return folder_artist if folder_artist != "Unknown Artist" else file_parts[0].strip(), file_parts[1].strip()
@@ -118,8 +113,7 @@ def parse_folder_and_filename(rel_path):
     return folder_artist, base.strip()
 
 def normalize_artist(raw_artist):
-    if not raw_artist:
-        return "Unknown Artist"
+    if not raw_artist: return "Unknown Artist"
     cleaned = re.split(r'\s*(?:;|feat\.?|ft\.?|&|with|,|/)\s*', raw_artist, flags=re.IGNORECASE)[0]
     return cleaned.strip() or "Unknown Artist"
 
@@ -150,8 +144,7 @@ def extract_audio_tags(full_path, rel_path):
                 if 'title' in audio:
                     val = audio['title']
                     title = val[0] if isinstance(val, list) else str(val)
-    except Exception:
-        pass
+    except Exception: pass
 
     folder_artist, fallback_title = parse_folder_and_filename(rel_path)
     artist = artist or folder_artist
@@ -193,14 +186,11 @@ def get_aggregated_stats():
     db = load_db()
     for username, user_data in db.get("users", {}).items():
         for liked_song in user_data.get("likes", []):
-            if liked_song in stats:
-                stats[liked_song]["likes"] += 1
+            if liked_song in stats: stats[liked_song]["likes"] += 1
         for disliked_song in user_data.get("dislikes", []):
-            if disliked_song in stats:
-                stats[disliked_song]["dislikes"] += 1
+            if disliked_song in stats: stats[disliked_song]["dislikes"] += 1
         for song, count in user_data.get("play_counts", {}).items():
-            if song in stats:
-                stats[song]["plays"] += count
+            if song in stats: stats[song]["plays"] += count
     return stats
 
 def get_radio_recommendation(username, history_list=None):
@@ -215,31 +205,22 @@ def get_radio_recommendation(username, history_list=None):
     history_set = set(history_list)
 
     valid_songs = [s for s in all_files if s not in dislikes and s not in history_set]
-    if not valid_songs:
-        valid_songs = [s for s in all_files if s not in dislikes]
-    if not valid_songs:
-        return get_song_metadata(random.choice(all_files)) if all_files else None
+    if not valid_songs: valid_songs = [s for s in all_files if s not in dislikes]
+    if not valid_songs: return get_song_metadata(random.choice(all_files)) if all_files else None
 
     weights = []
     for song in valid_songs:
         weight = 10.0
-        if song in likes:
-            weight += 15.0
+        if song in likes: weight += 15.0
         plays = play_counts.get(song, 0)
-        if plays == 0:
-            weight += 25.0
-        else:
-            weight = max(2.0, weight - (plays * 1.5))
+        if plays == 0: weight += 25.0
+        else: weight = max(2.0, weight - (plays * 1.5))
         weight *= random.uniform(0.8, 1.4)
         weights.append(weight)
 
     recommended_filename = random.choices(valid_songs, weights=weights, k=1)[0]
     return get_song_metadata(recommended_filename)
 
-
-# ---------------------------------------------------------
-# COVER & VIDEO HELPERS
-# ---------------------------------------------------------
 def generate_placeholder_cover(artist, title):
     h = hashlib.md5((artist + title).encode('utf-8')).hexdigest()
     bg_color = f"#{h[:6]}"
@@ -251,8 +232,7 @@ def generate_placeholder_cover(artist, title):
     for word in (artist + " " + title).split():
         if word and word[0].isalnum():
             initials += word[0].upper()
-            if len(initials) >= 2:
-                break
+            if len(initials) >= 2: break
     if not initials: initials = "♪"
 
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 500 500">
@@ -321,40 +301,30 @@ HTML_TEMPLATE = """
     <style>
         :root { --bg: {{ user_bg | default('#050505') }}; --panel: #121212; --highlight: #222222; --text: #ffffff; --subtext: #a7a7a7; --accent: #1DB954; --card-bg: #181818; }
         * { box-sizing: border-box; }
-        
         body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: radial-gradient(circle at top left, #1a1a1a 0%, var(--bg) 100%); color: var(--text); margin: 0; overflow: hidden; display: flex; height: 100vh; }
-        
         .sidebar { width: 240px; background: transparent; padding: 24px 16px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; z-index: 10; }
         .logo { font-size: 20px; font-weight: 800; padding: 0 12px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; letter-spacing: 0.5px; }
         .nav-section-title { font-size: 11px; text-transform: uppercase; color: var(--subtext); letter-spacing: 1.2px; padding: 12px 12px 4px 12px; font-weight: 700; }
         .nav-item { padding: 10px 12px; border-radius: 6px; cursor: pointer; color: var(--subtext); font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 15px; transition: all 0.2s ease; }
         .nav-item:hover, .nav-item.active { color: var(--text); background: var(--highlight); }
         .nav-item i { font-size: 18px; width: 20px; text-align: center; }
-        
         .center-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; position: relative; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
         .top-bar { height: 64px; background: rgba(18,18,18,0.7); backdrop-filter: blur(20px); display: flex; align-items: center; justify-content: space-between; padding: 0 32px; position: absolute; top: 0; left: 0; right: 0; z-index: 50; border-radius: 12px 12px 0 0; }
         .main-content { flex: 1; padding: 84px 32px 32px 32px; overflow-y: auto; scroll-behavior: smooth; }
-        
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .fade-in { animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-        
         .right-panel { width: 340px; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; padding: 24px; display: none; flex-direction: column; align-items: center; text-align: center; overflow: hidden; transition: 0.3s; flex-shrink: 0; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
-        
         .rp-media-container { position: relative; width: 220px; height: 220px; margin: 15px 0 25px 0; }
         .rp-cover-glow { position: absolute; top: 10%; left: 10%; width: 80%; height: 80%; filter: blur(35px); opacity: 0.65; z-index: 1; transition: background-image 0.5s ease; background-size: cover; background-position: center; border-radius: 50%; }
         #rp-cover { position: absolute; z-index: 2; top:0; left:0; width: 100%; height: 100%; border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.7); object-fit: cover; transition: opacity 0.5s ease; }
         #rp-video-container { position: absolute; top:0; left:0; width:100%; height:100%; border-radius: 8px; overflow: hidden; z-index: 3; opacity: 0; transition: opacity 0.5s; pointer-events: none; box-shadow: 0 12px 30px rgba(0,0,0,0.7); }
         #rp-video { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 600px; height: 337px; }
-
         #visualizer { width: 100%; height: 50px; display: block; filter: drop-shadow(0px 0px 8px rgba(29, 185, 84, 0.5)); margin-top: 5px; }
-
         .player-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 88px; background: #000; border-top: 1px solid #222; display: flex; align-items: center; padding: 0 24px; justify-content: space-between; z-index: 1000; }
-        
         .search-container { display: flex; align-items: center; background: #242424; border-radius: 24px; padding: 8px 16px; width: 320px; border: 1px solid transparent; transition: 0.2s; }
         .search-container:focus-within { border-color: #555; background: #2a2a2a; }
         .search-container i { color: var(--subtext); font-size: 14px; margin-right: 10px; }
         .search-container input { background: transparent; border: none; color: white; width: 100%; outline: none; font-size: 14px; }
-        
         .user-badge-wrapper { position: relative; display: inline-block; }
         .user-badge { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; background: #1a1a1a; padding: 6px 14px; border-radius: 20px; border: 1px solid #333; cursor: pointer; transition: 0.2s; }
         .user-badge:hover { background: #2a2a2a; border-color: #555; }
@@ -363,61 +333,49 @@ HTML_TEMPLATE = """
         .dropdown-item { padding: 12px 16px; font-size: 13px; font-weight: 600; color: var(--subtext); display: flex; align-items: center; gap: 12px; cursor: pointer; text-decoration: none; transition: 0.2s; }
         .dropdown-item:hover { background: #333; color: var(--text); }
         .dropdown-divider { height: 1px; background: #3d3d3d; margin: 4px 0; }
-
         h2 { font-size: 26px; font-weight: 700; margin-top: 0; margin-bottom: 24px; letter-spacing: -0.5px; }
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 20px; margin-bottom: 40px; }
         .scroll-row { display: flex; gap: 20px; overflow-x: auto; padding-bottom: 16px; margin-bottom: 36px; scroll-snap-type: x mandatory; }
         .scroll-row .card { min-width: 180px; flex-shrink: 0; scroll-snap-align: start; }
-        
         .card { background: var(--card-bg); padding: 14px; border-radius: 8px; cursor: pointer; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); position: relative; text-align: left; }
         .card:hover { background: #252525; transform: translateY(-6px); box-shadow: 0 12px 30px rgba(0,0,0,0.6); }
         .card-img-container { width: 100%; aspect-ratio: 1; background: #222; border-radius: 6px; margin-bottom: 12px; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 36px; color: #444; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
         .card-img-container img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; }
-        
         .card-play-overlay { position: absolute; bottom: 10px; right: 10px; background: var(--accent); color: #000; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; opacity: 0; transform: translateY(10px); transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 8px 15px rgba(0,0,0,0.5); z-index: 2;}
         .card:hover .card-play-overlay { opacity: 1; transform: translateY(0); }
         .card-play-overlay:hover { transform: scale(1.1) !important; background: #1ed760; }
-
         .card-info { display: flex; flex-direction: column; gap: 4px; }
         .card-title { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .card-bottom-row { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
         .card-artist { font-weight: 500; color: var(--subtext); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; padding-right: 8px; }
         .card-stats { display: flex; gap: 8px; font-size: 11px; color: var(--subtext); }
-        
         .now-playing-info { width: 28%; display: flex; align-items: center; gap: 14px; }
         .np-cover { width: 56px; height: 56px; background: #222; border-radius: 6px; object-fit: cover; box-shadow: 0 4px 12px rgba(0,0,0,0.5); cursor: pointer;}
         .np-text { display: flex; flex-direction: column; overflow: hidden; }
         .np-title { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .np-artist { color: var(--subtext); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
-        
         .controls { width: 44%; display: flex; flex-direction: column; align-items: center; gap: 6px; }
         .buttons { display: flex; gap: 20px; align-items: center; }
         .volume-controls { display: flex; align-items: center; gap: 12px; width: 28%; justify-content: flex-end; color: var(--subtext); }
-        
         @keyframes pop { 0% { transform: scale(1); } 50% { transform: scale(1.35); } 100% { transform: scale(1); } }
         .pop-anim { animation: pop 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-        
         .btn { background: none; border: none; color: var(--subtext); font-size: 16px; cursor: pointer; transition: color 0.2s; outline: none; }
         .btn:hover { color: var(--text); }
-        .btn.active#like-btn i, .btn.active.shuffle i, .btn.active.repeat i { color: var(--accent) !important; }
-        .btn.active#dislike-btn i { color: #ff5555 !important; } 
+        .btn.active#like-btn i, .btn.active.shuffle i, .btn.active.repeat i, .btn.active#sleep-btn i { color: var(--accent) !important; }
+        .btn.active#dislike-btn i { color: #ff5555 !important; }
         .btn.play-btn { background: var(--text); color: var(--bg); height: 34px; width: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: transform 0.2s; }
         .btn.play-btn:hover { transform: scale(1.08); color: var(--bg); }
         audio { display: none; }
-        
         input[type=range] { -webkit-appearance: none; background: #4d4d4d; height: 4px; border-radius: 2px; outline: none; cursor: pointer; width: 100%; transition: 0.1s; }
         input[type=range]:hover { height: 6px; }
         input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #fff; opacity: 0; transition: 0.1s; box-shadow: 0 2px 4px rgba(0,0,0,0.5); }
         input[type=range]:hover::-webkit-slider-thumb { opacity: 1; }
-        
         .lyrics-container { position: relative; width: 100%; flex: 1; overflow-y: auto; text-align: left; padding-top: 20px; padding-bottom: 80px; scroll-behavior: smooth; mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); }
         .lyric-line { font-size: 17px; color: rgba(255, 255, 255, 0.35); padding: 8px 12px; margin: 4px 0; border-radius: 6px; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); font-weight: 600; cursor: pointer; transform-origin: left center; }
         .lyric-line:hover { color: rgba(255, 255, 255, 0.8); background: rgba(255,255,255,0.03); }
         .lyric-line.active { color: var(--accent); font-size: 21px; font-weight: 700; text-shadow: 0 0 15px rgba(29, 185, 84, 0.4); transform: translateX(4px); opacity: 1; }
-        
         .lyric-word { transition: all 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275); display: inline-block; }
         .lyric-word.active-word { color: #ff9500 !important; text-shadow: 0 0 18px rgba(255, 149, 0, 0.9) !important; transform: scale(1.15) translateY(-2px); }
-        
         .admin-card { background: #181818; border: 1px solid #282828; border-radius: 10px; padding: 24px; margin-bottom: 24px; max-width: 700px; }
         .admin-table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14px; text-align: left; }
         .admin-table th, .admin-table td { padding: 12px 14px; border-bottom: 1px solid #222; }
@@ -428,18 +386,37 @@ HTML_TEMPLATE = """
         .action-btn:hover { background: #383838; }
         .action-btn.danger { background: rgba(255,85,85,0.15); color: #ff5555; }
         .action-btn.danger:hover { background: rgba(255,85,85,0.3); }
-
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 2000; align-items: center; justify-content: center; backdrop-filter: blur(5px); }
         .modal-card { background: #181818; border: 1px solid #333; padding: 30px; border-radius: 12px; width: 380px; box-shadow: 0 20px 40px rgba(0,0,0,0.8); text-align: center; }
         .modal-card h3 { margin-top: 0; margin-bottom: 20px; }
         .playlist-select-item { padding: 12px 16px; background: #222; border-radius: 6px; margin-bottom: 8px; cursor: pointer; font-weight: 600; text-align: left; display: flex; justify-content: space-between; align-items: center; transition: 0.2s; }
         .playlist-select-item:hover { background: #2a2a2a; border-color: var(--accent); color: var(--accent); }
+        
+        /* Social / Chat Styles */
+        .social-container { display: flex; height: calc(100vh - 120px); gap: 20px; }
+        .social-sidebar { width: 300px; background: #181818; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #282828; }
+        .social-sidebar-header { padding: 16px; border-bottom: 1px solid #282828; }
+        .social-list { flex: 1; overflow-y: auto; padding: 10px; }
+        .friend-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-radius: 8px; cursor: pointer; transition: 0.2s; margin-bottom: 4px; }
+        .friend-item:hover, .friend-item.active { background: #282828; }
+        .friend-item-info { display: flex; align-items: center; gap: 12px; }
+        .friend-pfp { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; background: #333; }
+        .chat-area { flex: 1; background: #181818; border-radius: 12px; display: flex; flex-direction: column; border: 1px solid #282828; overflow: hidden; }
+        .chat-header { padding: 16px 24px; border-bottom: 1px solid #282828; display: flex; align-items: center; gap: 12px; background: #1f1f1f; }
+        .chat-history { flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+        .chat-bubble { max-width: 70%; padding: 12px 16px; border-radius: 18px; font-size: 14px; line-height: 1.4; position: relative; }
+        .chat-bubble.sent { background: var(--accent); color: #000; align-self: flex-end; border-bottom-right-radius: 4px; }
+        .chat-bubble.received { background: #282828; color: #fff; align-self: flex-start; border-bottom-left-radius: 4px; }
+        .chat-time { font-size: 10px; opacity: 0.7; margin-top: 4px; text-align: right; }
+        .chat-input-area { padding: 16px; border-top: 1px solid #282828; display: flex; gap: 12px; background: #1f1f1f; }
+        .chat-input { flex: 1; padding: 12px 20px; border-radius: 24px; border: none; background: #282828; color: white; outline: none; }
+        .chat-send-btn { background: var(--accent); color: black; border: none; width: 44px; height: 44px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: 0.2s; }
+        .chat-send-btn:hover { transform: scale(1.05); }
 
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
-        
         .auth-container { width: 100%; height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
         .auth-card { background: var(--panel); padding: 40px; border-radius: 12px; text-align: center; width: 340px; border: 1px solid #222; box-shadow: 0 15px 35px rgba(0,0,0,0.8); }
         .auth-card h2 { margin-bottom: 20px; font-size: 24px; }
@@ -447,7 +424,6 @@ HTML_TEMPLATE = """
         input[type=text]:focus, input[type=password]:focus { border-color: var(--accent); }
         button.primary { background: var(--accent); color: black; border: none; padding: 12px 24px; border-radius: 24px; font-weight: 700; cursor: pointer; margin-top: 10px; width: 100%; font-size: 15px; transition: 0.2s; }
         button.primary:hover { transform: scale(1.02); background: #1ed760; }
-        
         .eq-container { display: flex; align-items: flex-end; gap: 3px; height: 16px; }
         .eq-bar { width: 3px; background: var(--accent); border-radius: 1px; animation: eqbounce 1s infinite ease-in-out; }
         .eq-bar:nth-child(1) { height: 40%; animation-delay: 0s; }
@@ -491,6 +467,9 @@ HTML_TEMPLATE = """
         <div class="nav-item" onclick="switchView('playlists', this)"><i class="fas fa-list-music"></i> Playlists</div>
         <div class="nav-item" onclick="switchView('radio', this)"><i class="fas fa-broadcast-tower"></i> Infinite Radio</div>
         
+        <div class="nav-section-title" style="margin-top: 16px;">Social</div>
+        <div class="nav-item" onclick="switchView('messages', this)"><i class="fas fa-comment-alt"></i> Messages</div>
+
         <div class="nav-section-title" style="margin-top: 16px;">General</div>
         <div class="nav-item" onclick="switchView('settings', this)"><i class="fas fa-cog"></i> Settings</div>
     </div>
@@ -552,7 +531,7 @@ HTML_TEMPLATE = """
 
     <div class="player-bar">
         <div class="now-playing-info">
-            <img id="np-cover" class="np-cover" src="" alt="Cover" onclick="document.querySelector('.right-panel').style.display='flex'">
+            <img id="np-cover" class="np-cover" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" alt="Cover" onclick="document.querySelector('.right-panel').style.display='flex'">
             <div class="np-text">
                 <div class="np-title" id="np-title">No track selected</div>
                 <div class="np-artist" id="np-artist">-</div>
@@ -568,6 +547,7 @@ HTML_TEMPLATE = """
                 </button>
                 <button class="btn" onclick="nextTrack()" title="Next Track"><i class="fas fa-step-forward"></i></button>
                 <button class="btn" id="repeat-btn" onclick="toggleRepeat()" title="Repeat"><i class="fas fa-redo"></i></button>
+                <button class="btn" id="sleep-btn" onclick="toggleSleepTimer()" title="Set Sleep Timer"><i class="fas fa-moon"></i></button>
             </div>
             <div style="width: 100%; display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--subtext); font-weight:500;">
                 <span id="time-current">0:00</span>
@@ -580,6 +560,10 @@ HTML_TEMPLATE = """
         <div class="volume-controls">
             <button class="btn" id="dislike-btn" onclick="sendFeedback('dislike')"><i class="fas fa-thumbs-down"></i></button>
             <button class="btn" id="like-btn" onclick="sendFeedback('like')" style="margin-right:10px;"><i class="fas fa-heart"></i></button>
+            
+            <i class="fas fa-wave-square" title="Bass Boost" style="cursor:pointer; width:16px;"></i>
+            <input type="range" id="bass-bar" value="0" max="20" style="width: 60px; margin-right: 10px;" title="Bass Boost">
+            
             <i class="fas fa-volume-up" id="mute-icon" onclick="toggleMute()" style="cursor:pointer; width:16px;"></i>
             <input type="range" id="volume-bar" value="100" max="100" style="width: 90px;" title="Volume (Up/Down Arrows)">
         </div>
@@ -589,6 +573,7 @@ HTML_TEMPLATE = """
 
     <script>
         const currentUserIsAdmin = {{ 'true' if is_admin else 'false' }};
+        const currentSessionUser = "{{ session.user }}";
         
         let allSongs = [];
         let songStats = {};
@@ -604,6 +589,11 @@ HTML_TEMPLATE = """
         let syncedLyrics = [];
         let activeLyricIndex = -1;
         let selectedSongForPlaylist = null;
+        let sleepTimerId = null;
+
+        // Social / Chat variables
+        let currentChatFriend = null;
+        let messagePollInterval = null;
 
         let ytPlayer = null;
         let ytPlayerReady = false;
@@ -614,6 +604,7 @@ HTML_TEMPLATE = """
         let audioCtx;
         let analyser;
         let source;
+        let bassFilter;
         let visualizerCanvas = document.getElementById('visualizer');
         let canvasCtx = visualizerCanvas.getContext('2d');
         let visualizerInitialized = false;
@@ -625,6 +616,7 @@ HTML_TEMPLATE = """
         const eqAnim = document.getElementById('eq-anim');
         const progressBar = document.getElementById('progress-bar');
         const volumeBar = document.getElementById('volume-bar');
+        const bassBar = document.getElementById('bass-bar');
         const muteIcon = document.getElementById('mute-icon');
         const timeCurrentEl = document.getElementById('time-current');
         const timeTotalEl = document.getElementById('time-total');
@@ -638,6 +630,7 @@ HTML_TEMPLATE = """
             audio.volume = 1.0;
         }
         updateSliderFill(volumeBar);
+        updateSliderFill(bassBar);
 
         volumeBar.addEventListener('input', function() {
             audio.volume = this.value / 100;
@@ -647,6 +640,11 @@ HTML_TEMPLATE = """
             if (audio.volume === 0) { muteIcon.className = "fas fa-volume-mute"; }
             else if (audio.volume < 0.5) { muteIcon.className = "fas fa-volume-down"; }
             else { muteIcon.className = "fas fa-volume-up"; }
+        });
+        
+        bassBar.addEventListener('input', function() {
+            if(bassFilter) bassFilter.gain.value = this.value;
+            updateSliderFill(this);
         });
 
         document.addEventListener('keydown', (e) => {
@@ -667,6 +665,27 @@ HTML_TEMPLATE = """
             }
         });
 
+        function toggleSleepTimer() {
+            const btn = document.getElementById('sleep-btn');
+            if (sleepTimerId) {
+                clearTimeout(sleepTimerId);
+                sleepTimerId = null;
+                btn.classList.remove('active');
+                alert("Sleep timer cancelled.");
+            } else {
+                let mins = parseInt(prompt("Enter sleep timer in minutes (e.g., 30):"));
+                if (mins && !isNaN(mins) && mins > 0) {
+                    sleepTimerId = setTimeout(() => {
+                        audio.pause();
+                        sleepTimerId = null;
+                        document.getElementById('sleep-btn').classList.remove('active');
+                    }, mins * 60000);
+                    btn.classList.add('active');
+                    alert(`Music will stop automatically in ${mins} minutes.`);
+                }
+            }
+        }
+
         function initVisualizer() {
             if (visualizerInitialized) return;
             visualizerInitialized = true;
@@ -677,9 +696,16 @@ HTML_TEMPLATE = """
 
             analyser.fftSize = 256;
             analyser.smoothingTimeConstant = 0.85;
+            
+            // Bass Boost EQ
+            bassFilter = audioCtx.createBiquadFilter();
+            bassFilter.type = "lowshelf";
+            bassFilter.frequency.value = 120; // Target frequencies below 120Hz
+            bassFilter.gain.value = bassBar.value;
 
             source = audioCtx.createMediaElementSource(audio);
-            source.connect(analyser);
+            source.connect(bassFilter);
+            bassFilter.connect(analyser);
             analyser.connect(audioCtx.destination);
 
             const bufferLength = analyser.frequencyBinCount;
@@ -956,10 +982,16 @@ HTML_TEMPLATE = """
             if(el) el.classList.add('active');
             
             document.getElementById('global-search').value = '';
+            
+            if (messagePollInterval) {
+                clearInterval(messagePollInterval);
+                messagePollInterval = null;
+            }
 
             if (view === 'home') renderHome();
             if (view === 'artists') renderArtists();
             if (view === 'playlists') renderPlaylists();
+            if (view === 'messages') renderMessages();
             if (view === 'radio') startRadio();
             if (view === 'settings') renderSettings();
         }
@@ -973,7 +1005,6 @@ HTML_TEMPLATE = """
             renderGrid(results, `Search Results for "${query}"`);
         }
 
-        // Global arrays so HTML onclicks don't break string escaping
         function playQueueByFilenames(filenames, index) {
             let queue = filenames.map(f => allSongs.find(s => s.filename === f)).filter(Boolean);
             playQueue(queue, index);
@@ -1178,6 +1209,191 @@ HTML_TEMPLATE = """
             selectedSongForPlaylist = null;
         }
 
+        function renderMessages() {
+            contentDiv.innerHTML = `
+                <div class="fade-in social-container">
+                    <div class="social-sidebar">
+                        <div class="social-sidebar-header">
+                            <h3 style="margin:0 0 12px 0;">Friends</h3>
+                            <div style="display:flex; gap:8px;">
+                                <input type="text" id="add-friend-input" placeholder="Enter username..." style="flex:1; padding:8px 12px; border-radius:18px; border:none; background:#282828; color:white; font-size:12px; outline:none;">
+                                <button class="action-btn" style="padding:6px 12px; border-radius:18px;" onclick="sendFriendRequest()"><i class="fas fa-user-plus"></i></button>
+                            </div>
+                        </div>
+                        <div class="social-list" id="friends-list-container">
+                            <div style="text-align:center; padding:20px; color:var(--subtext);"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
+                        </div>
+                    </div>
+                    
+                    <div class="chat-area" id="chat-area">
+                        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--subtext);">
+                            <i class="fas fa-comments" style="font-size:48px; margin-bottom:16px; opacity:0.5;"></i>
+                            <h3>Your Messages</h3>
+                            <p>Select a friend to start chatting</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+            refreshFriendsList();
+        }
+
+        function refreshFriendsList() {
+            fetch('/api/social/friends').then(res => res.json()).then(data => {
+                let html = '';
+                
+                if(data.requests && data.requests.length > 0) {
+                    html += `<div style="font-size:11px; text-transform:uppercase; color:var(--accent); font-weight:700; margin:10px 0 6px 4px;">Pending Requests</div>`;
+                    data.requests.forEach(req => {
+                        let pfp = req.pfp ? req.pfp : "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%231DB954'><path d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z'/></svg>";
+                        html += `
+                        <div class="friend-item" style="border: 1px dashed var(--accent);">
+                            <div class="friend-item-info">
+                                <img src="${pfp}" class="friend-pfp">
+                                <span style="font-weight:600; font-size:14px;">${req.username}</span>
+                            </div>
+                            <div>
+                                <button class="action-btn" style="background:var(--accent); color:black; padding:4px 8px;" onclick="acceptFriend('${req.username}')"><i class="fas fa-check"></i></button>
+                            </div>
+                        </div>`;
+                    });
+                }
+                
+                html += `<div style="font-size:11px; text-transform:uppercase; color:var(--subtext); font-weight:700; margin:14px 0 6px 4px;">Direct Messages</div>`;
+                if(data.friends && data.friends.length > 0) {
+                    data.friends.forEach(f => {
+                        let pfp = f.pfp ? f.pfp : "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23555'><path d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z'/></svg>";
+                        let activeClass = (currentChatFriend === f.username) ? 'active' : '';
+                        
+                        // Live Status Formatting
+                        let npText = "";
+                        if (f.now_playing) {
+                            let songMeta = allSongs.find(s => s.filename === f.now_playing.song);
+                            if(songMeta) {
+                                npText = `<div style="font-size:11px; color:var(--accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; width: 150px; margin-top: 2px;"><i class="fas fa-play" style="font-size:8px;"></i> ${songMeta.title.replace(/</g, '&lt;')}</div>`;
+                            }
+                        }
+
+                        html += `
+                        <div class="friend-item ${activeClass}" onclick="openChat('${f.username}', '${pfp}')">
+                            <div class="friend-item-info">
+                                <img src="${pfp}" class="friend-pfp">
+                                <div style="display:flex; flex-direction:column;">
+                                    <span style="font-weight:600; font-size:14px;">${f.username}</span>
+                                    ${npText}
+                                </div>
+                            </div>
+                        </div>`;
+                    });
+                } else {
+                    html += `<div style="padding:10px; color:var(--subtext); font-size:13px;">No friends yet. Send a request!</div>`;
+                }
+                
+                let container = document.getElementById('friends-list-container');
+                if(container) container.innerHTML = html;
+            });
+        }
+
+        function sendFriendRequest() {
+            let target = document.getElementById('add-friend-input').value.trim();
+            if(!target) return;
+            
+            fetch('/api/social/request', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({target_username: target})
+            }).then(res => res.json()).then(data => {
+                if(data.success) {
+                    alert("Friend request sent!");
+                    document.getElementById('add-friend-input').value = '';
+                } else {
+                    alert(data.error);
+                }
+            });
+        }
+
+        function acceptFriend(target) {
+            fetch('/api/social/accept', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({target_username: target})
+            }).then(res => res.json()).then(data => {
+                if(data.success) refreshFriendsList();
+            });
+        }
+
+        function openChat(friendUsername, friendPfp) {
+            currentChatFriend = friendUsername;
+            refreshFriendsList();
+            
+            document.getElementById('chat-area').innerHTML = `
+                <div class="chat-header">
+                    <img src="${friendPfp}" class="friend-pfp" style="width:40px; height:40px;">
+                    <div style="font-size:18px; font-weight:700;">${friendUsername}</div>
+                </div>
+                <div class="chat-history" id="chat-history-container">
+                    <div style="text-align:center; padding:20px; color:var(--subtext);"><i class="fas fa-spinner fa-spin"></i> Loading messages...</div>
+                </div>
+                <div class="chat-input-area">
+                    <input type="text" id="chat-msg-input" class="chat-input" placeholder="Type a message..." onkeypress="if(event.key === 'Enter') sendMessage()">
+                    <button class="chat-send-btn" onclick="sendMessage()"><i class="fas fa-paper-plane"></i></button>
+                </div>
+            `;
+            
+            loadChatHistory();
+            
+            if(messagePollInterval) clearInterval(messagePollInterval);
+            messagePollInterval = setInterval(() => {
+                if(currentChatFriend) {
+                    loadChatHistory(true);
+                    refreshFriendsList(); // Keep live statuses updating
+                }
+            }, 3000);
+        }
+
+        function loadChatHistory(isPolling = false) {
+            if(!currentChatFriend) return;
+            fetch(`/api/social/messages/${encodeURIComponent(currentChatFriend)}`)
+                .then(res => res.json())
+                .then(data => {
+                    let container = document.getElementById('chat-history-container');
+                    if(!container) return;
+                    
+                    let html = '';
+                    if(data.messages.length === 0) {
+                        html = `<div style="text-align:center; color:var(--subtext); margin-top:auto; margin-bottom:auto;">Say hi to ${currentChatFriend}!</div>`;
+                    } else {
+                        data.messages.forEach(m => {
+                            let isMe = m.from === currentSessionUser;
+                            let bubbleClass = isMe ? 'sent' : 'received';
+                            let timeStr = new Date(m.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                            html += `
+                            <div class="chat-bubble ${bubbleClass}">
+                                <div>${m.msg.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                                <div class="chat-time">${timeStr}</div>
+                            </div>`;
+                        });
+                    }
+                    
+                    let shouldScroll = !isPolling || (container.scrollHeight - container.scrollTop <= container.clientHeight + 50);
+                    container.innerHTML = html;
+                    if(shouldScroll) container.scrollTop = container.scrollHeight;
+                });
+        }
+
+        function sendMessage() {
+            let input = document.getElementById('chat-msg-input');
+            let msg = input.value.trim();
+            if(!msg || !currentChatFriend) return;
+            
+            input.value = '';
+            
+            fetch(`/api/social/messages/${encodeURIComponent(currentChatFriend)}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({msg: msg})
+            }).then(() => loadChatHistory());
+        }
+
         function renderSettings() {
             let html = `
                 <div class="fade-in">
@@ -1351,268 +1567,6 @@ HTML_TEMPLATE = """
             }).then(() => loadUsersTable());
         }
 
-        function playQueue(queue, index) {
-            isRadioMode = false;
-            currentQueue = queue;
-            originalQueue = [...queue];
-            currentIndex = index;
-            if(isShuffle) toggleShuffle();
-            loadSong(currentQueue[currentIndex]);
-        }
-
-        function startRadio() {
-            isRadioMode = true;
-            radioHistory = [];
-            contentDiv.innerHTML = `
-                <div class="fade-in" style="text-align:center; margin-top: 100px;">
-                    <i class="fas fa-broadcast-tower" style="font-size: 80px; color: var(--accent); margin-bottom: 20px;"></i>
-                    <h2>Infinite Radio Active</h2>
-                    <p style="color:var(--subtext)">Playing personalized tracks based on your likes and listen time.</p>
-                </div>
-            `;
-            nextTrack();
-        }
-
-        function loadSong(songObj) {
-            currentSongObj = songObj;
-
-            if (isRadioMode) {
-                radioHistory.push(songObj.filename);
-                if (radioHistory.length > 15) radioHistory.shift();
-            }
-
-            audio.src = '/play/' + encodeURIComponent(songObj.filename).replace(/%2F/g, '/');
-            audio.play();
-
-            rightPanel.style.display = 'flex';
-            let coverUrl = getCoverUrl(songObj);
-
-            document.title = "▶ " + songObj.title + " - " + songObj.artist;
-
-            document.getElementById('np-title').innerText = songObj.title;
-            document.getElementById('np-artist').innerText = songObj.artist;
-            document.getElementById('np-cover').src = coverUrl;
-
-            document.getElementById('rp-title').innerText = songObj.title;
-            document.getElementById('rp-artist').innerText = songObj.artist;
-
-            document.getElementById('rp-video-container').style.opacity = '0';
-            document.getElementById('rp-cover').src = coverUrl;
-            document.getElementById('rp-cover').style.opacity = '1';
-            document.getElementById('rp-cover-glow').style.backgroundImage = `url('${coverUrl}')`;
-
-            updateMediaSession(songObj, coverUrl);
-            fetchStatusAndLog(songObj.filename);
-            fetchLyrics(songObj.artist, songObj.title);
-
-            const currentOrigin = encodeURIComponent(window.location.origin);
-
-            fetch(`/api/video?artist=${encodeURIComponent(songObj.artist)}&song=${encodeURIComponent(songObj.title)}`)
-                .then(res => res.json())
-                .then(data => {
-                    if (data.youtube_id && currentSongObj.filename === songObj.filename) {
-                        if (ytPlayerReady && ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
-                            ytPlayer.loadVideoById({ 'videoId': data.youtube_id, 'startSeconds': audio.currentTime });
-                            ytPlayer.mute();
-                        } else if (ytPlayerReady) {
-                            ytPlayer = new YT.Player('rp-video', {
-                                height: '337',
-                                width: '600',
-                                videoId: data.youtube_id,
-                                playerVars: {
-                                    'autoplay': 1,
-                                    'controls': 0,
-                                    'disablekb': 1,
-                                    'modestbranding': 1,
-                                    'start': Math.floor(audio.currentTime),
-                                    'origin': window.location.origin
-                                },
-                                events: {
-                                    'onReady': (event) => {
-                                        event.target.mute();
-                                        event.target.playVideo();
-                                    }
-                                }
-                            });
-                        }
-
-                        setTimeout(() => {
-                            if(currentSongObj.filename === songObj.filename) {
-                                document.getElementById('rp-video-container').style.opacity = '1';
-                            }
-                        }, 1800);
-                    }
-                });
-        }
-
-        function fetchLyrics(artist, track) {
-            lyricsContainer.innerHTML = '<div style="color:#555; text-align:center; padding-top:40px;"><i class="fas fa-spinner fa-spin"></i> Searching lyrics...</div>';
-            syncedLyrics = [];
-            activeLyricIndex = -1;
-
-            fetch(`https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(track)}`)
-                .then(res => res.json())
-                .then(data => {
-                    if (data && data.syncedLyrics) {
-                        parseLRCLyrics(data.syncedLyrics);
-                    } else if (data && data.plainLyrics) {
-                        lyricsContainer.innerHTML = `<div style="color:var(--subtext); line-height: 2; padding: 0 10px;">${data.plainLyrics.replace(/\\n/g, '<br>')}</div>`;
-                    } else {
-                        fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(artist + ' ' + track)}`)
-                            .then(res => res.json())
-                            .then(searchData => {
-                                if(searchData && searchData.length > 0 && searchData[0].syncedLyrics) {
-                                    parseLRCLyrics(searchData[0].syncedLyrics);
-                                } else if(searchData && searchData.length > 0 && searchData[0].plainLyrics) {
-                                    lyricsContainer.innerHTML = `<div style="color:var(--subtext); line-height: 2; padding: 0 10px;">${searchData[0].plainLyrics.replace(/\\n/g, '<br>')}</div>`;
-                                } else {
-                                    lyricsContainer.innerHTML = '<div style="color:#555; text-align:center; padding-top:40px;">No lyrics found for this track.</div>';
-                                }
-                            });
-                    }
-                })
-                .catch(err => {
-                    lyricsContainer.innerHTML = '<div style="color:#555; text-align:center; padding-top:40px;">Failed to load lyrics.</div>';
-                });
-        }
-
-        function parseLRCLyrics(lrcString) {
-            const lines = lrcString.split('\\n');
-            const regex = /\\[(\\d{2}):(\\d{2}\\.\\d{2,3})\\](.*)/;
-            syncedLyrics = [];
-
-            lines.forEach(line => {
-                const match = line.match(regex);
-                if (match) {
-                    const time = (parseInt(match[1]) * 60) + parseFloat(match[2]);
-                    const text = match[3].trim();
-                    if (text !== '') {
-                        const words = text.split(' ').filter(w => w !== '');
-                        syncedLyrics.push({ time, text, words });
-                    }
-                }
-            });
-
-            for (let i = 0; i < syncedLyrics.length; i++) {
-                let gap = 5.0;
-                if (i < syncedLyrics.length - 1) {
-                    gap = syncedLyrics[i+1].time - syncedLyrics[i].time;
-                }
-
-                syncedLyrics[i].duration = Math.min(gap, Math.max(1.5, syncedLyrics[i].words.length * 0.45));
-
-                let totalChars = syncedLyrics[i].words.reduce((sum, w) => sum + w.length, 0);
-                let charAcc = 0;
-                syncedLyrics[i].wordTimings = syncedLyrics[i].words.map(w => {
-                    let startPercent = charAcc / totalChars;
-                    charAcc += w.length;
-                    let endPercent = charAcc / totalChars;
-                    return { startPercent, endPercent };
-                });
-            }
-
-            lyricsContainer.innerHTML = '';
-            syncedLyrics.forEach((line, index) => {
-                const el = document.createElement('div');
-                el.className = 'lyric-line';
-                el.id = `lyric-${index}`;
-
-                let wordsHTML = '';
-                line.words.forEach((word, wIndex) => {
-                    wordsHTML += `<span class="lyric-word" id="word-${index}-${wIndex}">${word}</span> `;
-                });
-                el.innerHTML = wordsHTML;
-
-                el.onclick = () => { audio.currentTime = line.time; audio.play(); };
-                lyricsContainer.appendChild(el);
-            });
-        }
-
-        function fetchStatusAndLog(filename) {
-            fetch('/api/status?song=' + encodeURIComponent(filename))
-                .then(res => res.json())
-                .then(data => {
-                    document.getElementById('like-btn').classList.toggle('active', data.liked);
-                    document.getElementById('dislike-btn').classList.toggle('active', data.disliked);
-                });
-
-            fetch('/api/feedback', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({action: 'listen', song: filename})
-            }).then(() => refreshStatsUI());
-        }
-
-        function nextTrack() {
-            if (isRadioMode) {
-                const historyParam = radioHistory.map(encodeURIComponent).join(',');
-                fetch('/api/radio/next?history=' + historyParam)
-                    .then(res => res.json())
-                    .then(data => {
-                        if(data.song) loadSong(data.song);
-                    });
-            } else if (currentQueue.length > 0) {
-                if (isRepeat) {
-                    audio.currentTime = 0;
-                    audio.play();
-                } else {
-                    currentIndex = (currentIndex + 1) % currentQueue.length;
-                    loadSong(currentQueue[currentIndex]);
-                }
-            }
-        }
-
-        function prevTrack() {
-            if(audio.currentTime > 3) {
-                audio.currentTime = 0;
-            } else if (!isRadioMode && currentQueue.length > 0) {
-                currentIndex = (currentIndex - 1 + currentQueue.length) % currentQueue.length;
-                loadSong(currentQueue[currentIndex]);
-            }
-        }
-
-        function animateButton(btnId) {
-            const btn = document.getElementById(btnId);
-            btn.classList.remove('pop-anim');
-            void btn.offsetWidth;
-            btn.classList.add('pop-anim');
-        }
-
-        function refreshStatsUI() {
-            fetch('/api/data').then(res => res.json()).then(data => {
-                songStats = data.stats;
-                data.songs.forEach(song => {
-                    const el = document.getElementById(`stats-${safeId(song.filename)}`);
-                    if (el) {
-                        let s = songStats[song.filename] || {likes: 0, dislikes: 0};
-                        el.innerHTML = `<span class="stat-like"><i class="fas fa-heart" style="color:var(--accent)"></i> ${s.likes}</span>`;
-                    }
-                });
-            });
-        }
-
-        function sendFeedback(action) {
-            if(!currentSongObj) return;
-            fetch('/api/feedback', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({action: action, song: currentSongObj.filename})
-            }).then(res => res.json()).then(data => {
-                if(action === 'like') {
-                    document.getElementById('like-btn').classList.toggle('active');
-                    document.getElementById('dislike-btn').classList.remove('active');
-                    animateButton('like-btn');
-                } else if(action === 'dislike') {
-                    document.getElementById('dislike-btn').classList.toggle('active');
-                    document.getElementById('like-btn').classList.remove('active');
-                    animateButton('dislike-btn');
-                    if(isRadioMode) nextTrack();
-                }
-                refreshStatsUI();
-            });
-        }
-
-        audio.addEventListener('ended', nextTrack);
     </script>
 {% endif %}
 </body>
@@ -1687,7 +1641,7 @@ def index():
         if request.method == 'POST':
             username = request.form['username'].strip()
             password = generate_password_hash(request.form['password'])
-            db["users"] = {username: {'password': password, 'is_admin': True, 'likes': [], 'dislikes': [], 'play_counts': {}, 'bg_color': '#050505', 'pfp': ''}}
+            db["users"] = {username: {'password': password, 'is_admin': True, 'likes': [], 'dislikes': [], 'play_counts': {}, 'bg_color': '#050505', 'pfp': '', 'friends': [], 'friend_requests': []}}
             save_db(db)
             return redirect(url_for('index'))
         return render_template_string(HTML_TEMPLATE, logged_in=False, setup=True)
@@ -1810,6 +1764,109 @@ def public_playlist_view(token):
     songs = [get_song_metadata(f) for f in pl['songs'] if os.path.exists(os.path.join(MUSIC_DIR, f))]
     return render_template_string(PUBLIC_PLAYLIST_TEMPLATE, playlist=pl, songs=songs)
 
+# --- SOCIAL & MESSAGING API ROUTES ---
+@app.route('/api/social/friends', methods=['GET'])
+def api_friends():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    me = session['user']
+    user_data = db["users"].get(me, {})
+    
+    friends_list = user_data.get('friends', [])
+    requests_list = user_data.get('friend_requests', [])
+    
+    friends_payload = []
+    for f in friends_list:
+        if f in db["users"]:
+            f_data = db["users"][f]
+            np = f_data.get('now_playing')
+            # Clear now_playing if older than 2 hours to prevent stale statuses
+            if np and (int(time.time()) - np.get('time', 0)) > 7200:
+                np = None
+            friends_payload.append({
+                "username": f, 
+                "pfp": f_data.get("pfp", ""),
+                "now_playing": np
+            })
+
+    requests_payload = [{"username": r, "pfp": db["users"].get(r, {}).get("pfp", "")} for r in requests_list if r in db["users"]]
+    return jsonify({"friends": friends_payload, "requests": requests_payload})
+
+@app.route('/api/social/status', methods=['POST'])
+def api_social_status():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    song = request.json.get('song')
+    if song:
+        db['users'][session['user']]['now_playing'] = {'song': song, 'time': int(time.time())}
+        save_db(db)
+    return jsonify({"success": True})
+
+@app.route('/api/social/request', methods=['POST'])
+def api_send_request():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    me = session['user']
+    target = request.json.get('target_username', '').strip()
+    
+    if target == me: return jsonify({"success": False, "error": "Cannot add yourself."})
+    if target not in db["users"]: return jsonify({"success": False, "error": "User not found."})
+    
+    target_data = db["users"][target]
+    if 'friend_requests' not in target_data: target_data['friend_requests'] = []
+    if 'friends' not in target_data: target_data['friends'] = []
+    
+    if me in target_data['friends']: return jsonify({"success": False, "error": "Already friends."})
+    if me in target_data['friend_requests']: return jsonify({"success": False, "error": "Request already sent."})
+    
+    target_data['friend_requests'].append(me)
+    save_db(db)
+    return jsonify({"success": True})
+
+@app.route('/api/social/accept', methods=['POST'])
+def api_accept_request():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    me = session['user']
+    target = request.json.get('target_username', '').strip()
+    
+    my_data = db["users"].get(me)
+    target_data = db["users"].get(target)
+    
+    if target in my_data.get('friend_requests', []):
+        my_data['friend_requests'].remove(target)
+        if 'friends' not in my_data: my_data['friends'] = []
+        if 'friends' not in target_data: target_data['friends'] = []
+        
+        if target not in my_data['friends']: my_data['friends'].append(target)
+        if me not in target_data['friends']: target_data['friends'].append(me)
+        
+        save_db(db)
+        return jsonify({"success": True})
+        
+    return jsonify({"success": False, "error": "No pending request."})
+
+@app.route('/api/social/messages/<friend>', methods=['GET', 'POST'])
+def api_messages(friend):
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    me = session['user']
+    if 'messages' not in db: db['messages'] = {}
+    
+    chat_key = f"{min(me, friend)}||{max(me, friend)}"
+    if chat_key not in db['messages']: db['messages'][chat_key] = []
+    
+    if request.method == 'GET':
+        return jsonify({"messages": db['messages'][chat_key]})
+    elif request.method == 'POST':
+        msg = request.json.get('msg', '').strip()
+        if not msg: return jsonify({"success": False})
+        
+        new_msg = { "from": me, "msg": msg, "timestamp": int(time.time()) }
+        db['messages'][chat_key].append(new_msg)
+        save_db(db)
+        return jsonify({"success": True})
+
 @app.route('/api/status')
 def api_status():
     if 'user' not in session: return jsonify({})
@@ -1860,14 +1917,34 @@ def change_username_api():
     if new_name == old_name: return jsonify({"success": True})
     if new_name in db["users"]: return jsonify({"error": "Username already taken."})
     
-    # Safely migrate all user data to the new key
     db["users"][new_name] = db["users"].pop(old_name)
     
-    # Update playlist creator tags
     for pl in db.get("playlists", {}).values():
         if pl["creator"] == old_name:
             pl["creator"] = new_name
             
+    for u_data in db["users"].values():
+        if old_name in u_data.get('friends', []):
+            u_data['friends'].remove(old_name)
+            u_data['friends'].append(new_name)
+        if old_name in u_data.get('friend_requests', []):
+            u_data['friend_requests'].remove(old_name)
+            u_data['friend_requests'].append(new_name)
+            
+    if 'messages' in db:
+        old_message_keys = list(db['messages'].keys())
+        for key in old_message_keys:
+            if old_name in key.split('||'):
+                parts = key.split('||')
+                other_person = parts[0] if parts[1] == old_name else parts[1]
+                new_key = f"{min(new_name, other_person)}||{max(new_name, other_person)}"
+                
+                chat_history = db['messages'].pop(key)
+                for msg in chat_history:
+                    if msg['from'] == old_name:
+                        msg['from'] = new_name
+                db['messages'][new_key] = chat_history
+
     save_db(db)
     session['user'] = new_name
     return jsonify({"success": True, "new_username": new_name})
@@ -1886,7 +1963,6 @@ def update_profile_api():
         if file.filename != '':
             ext = os.path.splitext(file.filename)[1].lower()
             if ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']:
-                # Save the new profile picture locally with a unique UUID to prevent caching issues
                 filename = f"pfp_{uuid.uuid4().hex[:8]}{ext}"
                 filepath = os.path.join(PROFILES_DIR, filename)
                 file.save(filepath)
@@ -1941,7 +2017,9 @@ def admin_users_api():
             "dislikes": [],
             "play_counts": {},
             "bg_color": "#050505",
-            "pfp": ""
+            "pfp": "",
+            "friends": [],
+            "friend_requests": []
         }
         save_db(db)
         return jsonify({"success": True})
@@ -1957,7 +2035,6 @@ def admin_users_api():
 
 @app.route('/api/cover')
 def api_cover():
-    """Safely return raw image bytes from local tags, or a clean SVG if none exists."""
     filename = request.args.get('file', '')
     filepath = os.path.join(MUSIC_DIR, filename)
 
@@ -1978,7 +2055,6 @@ def api_cover():
         except Exception:
             pass
 
-    # Safe fallback if no image could be extracted
     meta = get_song_metadata(filename) if filename else {"artist": "Unknown", "title": "Music"}
     svg = generate_placeholder_cover(meta['artist'], meta['title'])
     return Response(svg, mimetype='image/svg+xml')
