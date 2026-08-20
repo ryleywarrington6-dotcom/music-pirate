@@ -3,6 +3,7 @@ import sys
 import json
 import random
 import re
+import uuid
 import urllib.request
 import urllib.parse
 from flask import Flask, request, session, redirect, url_for, render_template_string, jsonify, send_from_directory, Response
@@ -17,13 +18,12 @@ except ImportError:
     sys.exit(1)
 
 PORT = int(os.environ.get("PORT", 8000))
-# Use a relative path so it works locally and on Render securely
 MUSIC_DIR = os.environ.get("MUSIC_DIR", "./Music")
 os.makedirs(MUSIC_DIR, exist_ok=True) 
 
 DB_FILE = 'database.json'
 COVERS_FILE = 'covers_v7.json' 
-METADATA_FILE = 'metadata_v4.json'
+METADATA_FILE = 'metadata_v5.json'
 VIDEO_CACHE_FILE = 'videos_v1.json' 
 
 app = Flask(__name__)
@@ -41,7 +41,7 @@ def load_json_file(filepath, default_data):
 def save_json_file(filepath, data):
     with open(filepath, 'w') as f: json.dump(data, f, indent=2)
 
-def load_db(): return load_json_file(DB_FILE, {"users": {}})
+def load_db(): return load_json_file(DB_FILE, {"users": {}, "playlists": {}})
 def save_db(db): save_json_file(DB_FILE, db)
 
 cover_cache = load_json_file(COVERS_FILE, {})
@@ -87,6 +87,11 @@ def parse_folder_and_filename(rel_path):
     
     return folder_artist, base.strip()
 
+def normalize_artist(raw_artist):
+    if not raw_artist: return "Unknown Artist"
+    cleaned = re.split(r'\s*(?:;|feat\.?|ft\.?|&|with|,|/)\s*', raw_artist, flags=re.IGNORECASE)[0]
+    return cleaned.strip() or "Unknown Artist"
+
 def extract_audio_tags(full_path, rel_path):
     artist, title = None, None
     try:
@@ -114,7 +119,7 @@ def extract_audio_tags(full_path, rel_path):
     artist = artist or folder_artist
     title = title or fallback_title
 
-    artist = artist.strip() if artist else "Unknown Artist"
+    artist = normalize_artist(artist)
     title = title.strip() if title else os.path.splitext(os.path.basename(rel_path))[0]
 
     return artist, title
@@ -213,28 +218,20 @@ def get_radio_recommendation(username, history_list=None):
     if not valid_songs: 
         return get_song_metadata(random.choice(all_files)) if all_files else None
 
-    last_artist = None
-    if history_list:
-        last_song = history_list[-1]
-        last_artist = get_song_metadata(last_song).get("artist")
-
     weights = []
     for song in valid_songs:
         weight = 10.0 
         
         if song in likes: 
-            weight += 30.0 
+            weight += 15.0 
             
         plays = play_counts.get(song, 0)
         if plays == 0:
-            weight += 15.0 
-        elif plays > 0:
-            weight += min(plays * 2.0, 20.0) 
+            weight += 25.0 
+        else:
+            weight = max(2.0, weight - (plays * 1.5))
             
-        meta = get_song_metadata(song)
-        if last_artist and meta['artist'] == last_artist:
-            weight += 12.0 
-            
+        weight *= random.uniform(0.8, 1.4)
         weights.append(weight)
         
     recommended_filename = random.choices(valid_songs, weights=weights, k=1)[0]
@@ -273,7 +270,6 @@ HTML_TEMPLATE = """
         /* Animations */
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .fade-in { animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-        @keyframes eq { 0% { height: 4px; } 100% { height: 16px; } }
         
         /* Right Sidebar Panel */
         .right-panel { width: 340px; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; padding: 24px; display: none; flex-direction: column; align-items: center; text-align: center; overflow: hidden; transition: 0.3s; flex-shrink: 0; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
@@ -354,7 +350,7 @@ HTML_TEMPLATE = """
         input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #fff; opacity: 0; transition: 0.1s; box-shadow: 0 2px 4px rgba(0,0,0,0.5); }
         input[type=range]:hover::-webkit-slider-thumb { opacity: 1; }
         
-        /* NEW LYRICS UI WITH BOUNCING WORDS */
+        /* IMPROVED LYRICS UI */
         .lyrics-container { position: relative; width: 100%; flex: 1; overflow-y: auto; text-align: left; padding-top: 20px; padding-bottom: 80px; scroll-behavior: smooth; mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); }
         .lyric-line { font-size: 17px; color: rgba(255, 255, 255, 0.35); padding: 8px 12px; margin: 4px 0; border-radius: 6px; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); font-weight: 600; cursor: pointer; transform-origin: left center; }
         .lyric-line:hover { color: rgba(255, 255, 255, 0.8); background: rgba(255,255,255,0.03); }
@@ -412,6 +408,7 @@ HTML_TEMPLATE = """
         <div class="nav-item active" onclick="switchView('home')"><i class="fas fa-home"></i> Home</div>
         <div class="nav-item" onclick="document.getElementById('global-search').focus();"><i class="fas fa-search"></i> Search</div>
         <div class="nav-item" onclick="switchView('artists')"><i class="fas fa-microphone"></i> Artists</div>
+        <div class="nav-item" onclick="switchView('playlists')"><i class="fas fa-list-music"></i> Playlists</div>
         <div class="nav-item" onclick="switchView('radio')"><i class="fas fa-broadcast-tower"></i> Infinite Radio</div>
         
         <div class="nav-section-title" style="margin-top: 16px;">General</div>
@@ -452,7 +449,6 @@ HTML_TEMPLATE = """
             </div>
         </div>
         
-        <!-- YOUTUBE OVERLAY CONTAINER WITH ERROR 153 FIX -->
         <div class="rp-media-container">
             <div class="rp-cover-glow" id="rp-cover-glow"></div>
             <img id="rp-cover" src="" alt="">
@@ -507,6 +503,9 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
+    <!-- YouTube API Script for Video Syncing -->
+    <script src="https://www.youtube.com/iframe_api"></script>
+
     <script>
         const currentUserIsAdmin = {{ 'true' if is_admin else 'false' }};
         
@@ -523,6 +522,13 @@ HTML_TEMPLATE = """
         let currentSongObj = null; 
         let syncedLyrics = [];
         let activeLyricIndex = -1;
+
+        let ytPlayer = null;
+        let ytReady = false;
+
+        function onYouTubeIframeAPIReady() {
+            // Initialized when the YouTube API script loads
+        }
 
         let audioCtx;
         let analyser;
@@ -543,7 +549,6 @@ HTML_TEMPLATE = """
         const timeTotalEl = document.getElementById('time-total');
         const lyricsContainer = document.getElementById('lyrics-container');
 
-        // KEYBOARD SHORTCUTS
         document.addEventListener('keydown', (e) => {
             if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
             
@@ -582,7 +587,6 @@ HTML_TEMPLATE = """
             
             function draw() {
                 requestAnimationFrame(draw);
-                
                 if (!audio.paused) {
                     analyser.getByteFrequencyData(dataArray);
                 } else {
@@ -662,17 +666,6 @@ HTML_TEMPLATE = """
             }
         }
 
-        function controlYouTube(command) {
-            let iframe = document.getElementById('rp-video');
-            if (iframe && iframe.contentWindow) {
-                iframe.contentWindow.postMessage(JSON.stringify({
-                    "event": "command",
-                    "func": command,
-                    "args": ""
-                }), '*');
-            }
-        }
-
         audio.addEventListener('play', () => {
             initVisualizer();
             if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
@@ -682,7 +675,10 @@ HTML_TEMPLATE = """
             playIcon.style.marginLeft = '0';
             eqAnim.classList.remove('paused');
             eqAnim.classList.add('playing');
-            controlYouTube('playVideo');
+            
+            if (ytPlayer && ytPlayer.playVideo) {
+                ytPlayer.playVideo();
+            }
         });
         
         audio.addEventListener('pause', () => {
@@ -690,7 +686,10 @@ HTML_TEMPLATE = """
             playIcon.classList.add('fa-play');
             playIcon.style.marginLeft = '2px';
             eqAnim.classList.add('paused');
-            controlYouTube('pauseVideo');
+            
+            if (ytPlayer && ytPlayer.pauseVideo) {
+                ytPlayer.pauseVideo();
+            }
         });
 
         audio.addEventListener('loadedmetadata', () => {
@@ -703,6 +702,14 @@ HTML_TEMPLATE = """
             progressBar.value = percent;
             updateSliderFill(progressBar);
             timeCurrentEl.innerText = formatTime(audio.currentTime);
+            
+            // Sync YouTube video position if it drifts by more than 1.5 seconds
+            if (ytPlayer && ytPlayer.getCurrentTime && ytPlayer.getPlayerState && ytPlayer.getPlayerState() === YT.PlayerState.PLAYING) {
+                let ytTime = ytPlayer.getCurrentTime();
+                if (Math.abs(ytTime - audio.currentTime) > 1.5) {
+                    ytPlayer.seekTo(audio.currentTime, true);
+                }
+            }
             
             if (syncedLyrics.length > 0) {
                 let newIndex = syncedLyrics.findIndex(l => l.time > audio.currentTime) - 1;
@@ -732,7 +739,6 @@ HTML_TEMPLATE = """
                     }
                 }
 
-                // Word Tracker - Character Weighted
                 if (activeLyricIndex >= 0) {
                     const line = syncedLyrics[activeLyricIndex];
                     if (line.words.length > 0) {
@@ -765,6 +771,9 @@ HTML_TEMPLATE = """
         progressBar.addEventListener('input', function() {
             audio.currentTime = (this.value / 100) * audio.duration;
             updateSliderFill(this);
+            if (ytPlayer && ytPlayer.seekTo) {
+                ytPlayer.seekTo(audio.currentTime, true);
+            }
         });
         
         volumeBar.addEventListener('input', function() {
@@ -858,6 +867,7 @@ HTML_TEMPLATE = """
             
             if (view === 'home') renderHome();
             if (view === 'artists') renderArtists();
+            if (view === 'playlists') renderPlaylists();
             if (view === 'radio') startRadio();
             if (view === 'settings') renderSettings();
         }
@@ -871,24 +881,25 @@ HTML_TEMPLATE = """
             renderGrid(results, `Search Results for "${query}"`);
         }
 
-        function buildCardsHTML(songsArray, isRow = false) {
+        function buildCardsHTML(songsArray, isRow = false, playlistToken = null) {
             let html = isRow ? `<div class="scroll-row">` : `<div class="grid">`;
             songsArray.forEach((song, i) => {
                 let coverUrl = getCoverUrl(song);
                 let stats = songStats[song.filename] || {likes: 0, dislikes: 0, plays: 0};
                 
                 html += `
-                <div class="card" onclick="playQueue(${JSON.stringify(songsArray).replace(/"/g, '&quot;')}, ${i})">
-                    <div class="card-img-container">
+                <div class="card">
+                    <div class="card-img-container" onclick="playQueue(${JSON.stringify(songsArray).replace(/"/g, '&quot;')}, ${i})">
                         <img src="${coverUrl}" loading="lazy" onerror="this.style.display='none'">
                         <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
                     </div>
                     <div class="card-info">
-                        <div class="card-title" title="${song.title}">${song.title}</div>
+                        <div class="card-title" title="${song.title}" onclick="playQueue(${JSON.stringify(songsArray).replace(/"/g, '&quot;')}, ${i})">${song.title}</div>
                         <div class="card-bottom-row">
                             <div class="card-artist" title="${song.artist}">${song.artist}</div>
-                            <div class="card-stats" id="stats-${safeId(song.filename)}">
-                                <span class="stat-like"><i class="fas fa-heart" style="color:var(--accent)"></i> ${stats.likes}</span>
+                            <div>
+                                ${playlistToken ? `<button class="action-btn danger" onclick="removeFromPlaylist('${playlistToken}', '${song.filename}')" title="Remove"><i class="fas fa-times"></i></button>` : ''}
+                                <button class="action-btn" onclick="openAddToPlaylistModal('${song.filename}')" title="Add to Playlist"><i class="fas fa-plus"></i></button>
                             </div>
                         </div>
                     </div>
@@ -941,6 +952,101 @@ HTML_TEMPLATE = """
             });
             html += `</div></div>`;
             contentDiv.innerHTML = html;
+        }
+
+        function renderPlaylists() {
+            fetch('/api/playlists').then(res => res.json()).then(playlists => {
+                let html = `
+                    <div class="fade-in">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
+                            <h2 style="margin:0;">🎵 Playlists</h2>
+                            <button class="action-btn" style="background:var(--accent); color:black; padding:10px 18px; font-weight:700;" onclick="createPlaylistPrompt()"><i class="fas fa-plus"></i> New Playlist</button>
+                        </div>
+                        <div class="grid">
+                `;
+                
+                for (let [token, pl] of Object.entries(playlists)) {
+                    let sampleSong = pl.songs.length > 0 ? allSongs.find(s => s.filename === pl.songs[0]) : null;
+                    let coverUrl = sampleSong ? getCoverUrl(sampleSong) : '';
+                    
+                    html += `
+                    <div class="card" onclick="viewPlaylist('${token}')" style="text-align:center;">
+                        <div class="card-img-container">
+                            ${coverUrl ? `<img src="${coverUrl}" loading="lazy">` : '<i class="fas fa-music"></i>'}
+                            <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
+                        </div>
+                        <div class="card-title" style="text-align:center;">${pl.name}</div>
+                        <div class="card-artist" style="text-align:center; padding:0;">${pl.songs.length} tracks</div>
+                    </div>`;
+                }
+                
+                html += `</div></div>`;
+                contentDiv.innerHTML = html;
+            });
+        }
+
+        function createPlaylistPrompt() {
+            let name = prompt("Enter playlist name:");
+            if (!name) return;
+            fetch('/api/playlists', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name})
+            }).then(res => res.json()).then(() => renderPlaylists());
+        }
+
+        function viewPlaylist(token) {
+            fetch(`/api/playlist/${token}`).then(res => res.json()).then(pl => {
+                if (pl.error) { alert(pl.error); return; }
+                let playlistSongs = pl.songs.map(filename => allSongs.find(s => s.filename === filename)).filter(Boolean);
+                let shareUrl = window.location.origin + '/playlist/' + token;
+                
+                contentDiv.innerHTML = `
+                    <div class="fade-in">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                            <div>
+                                <h2 style="margin-bottom:4px;">${pl.name}</h2>
+                                <p style="color:var(--subtext); margin:0; font-size:13px;">Created by ${pl.creator}</p>
+                            </div>
+                            <div style="display:flex; gap:10px;">
+                                <button class="action-btn" onclick="navigator.clipboard.writeText('${shareUrl}'); alert('Shareable link copied to clipboard!');"><i class="fas fa-share-alt"></i> Share Link</button>
+                                <button class="action-btn danger" onclick="deletePlaylist('${token}')"><i class="fas fa-trash"></i> Delete</button>
+                            </div>
+                        </div>
+                        ${playlistSongs.length === 0 ? '<p style="color:var(--subtext);">This playlist is empty. Add songs from any track card!</p>' : buildCardsHTML(playlistSongs, false, token)}
+                    </div>
+                `;
+            });
+        }
+
+        function deletePlaylist(token) {
+            if(!confirm("Are you sure you want to delete this playlist?")) return;
+            fetch(`/api/playlist/${token}`, {method: 'DELETE'}).then(() => renderPlaylists());
+        }
+
+        function removeFromPlaylist(token, filename) {
+            fetch(`/api/playlist/${token}/song`, {
+                method: 'DELETE',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename})
+            }).then(() => viewPlaylist(token));
+        }
+
+        function openAddToPlaylistModal(filename) {
+            fetch('/api/playlists').then(res => res.json()).then(playlists => {
+                let plNames = Object.entries(playlists).map(([token, pl]) => `${pl.name} (Token: ${token})`).join('\\n');
+                let tokenInput = prompt(`Add to which playlist token?\\n\\nAvailable Playlists:\\n${plNames}`);
+                if (!tokenInput) return;
+                
+                fetch(`/api/playlist/${tokenInput.trim()}/song`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({filename})
+                }).then(res => res.json()).then(data => {
+                    if(data.success) alert("Song added successfully!");
+                    else alert(data.error || "Failed to add song");
+                });
+            });
         }
 
         function renderSettings() {
@@ -1066,7 +1172,7 @@ HTML_TEMPLATE = """
             
             if (isRadioMode) {
                 radioHistory.push(songObj.filename);
-                if (radioHistory.length > 10) radioHistory.shift();
+                if (radioHistory.length > 15) radioHistory.shift();
             }
 
             audio.src = '/play/' + encodeURIComponent(songObj.filename);
@@ -1085,7 +1191,6 @@ HTML_TEMPLATE = """
             document.getElementById('rp-artist').innerText = songObj.artist;
             
             document.getElementById('rp-video-container').style.opacity = '0';
-            document.getElementById('rp-video').src = '';
             document.getElementById('rp-cover').src = coverUrl;
             document.getElementById('rp-cover').style.opacity = '1';
             document.getElementById('rp-cover-glow').style.backgroundImage = `url('${coverUrl}')`;
@@ -1100,8 +1205,30 @@ HTML_TEMPLATE = """
                 .then(res => res.json())
                 .then(data => {
                     if (data.youtube_id && currentSongObj.filename === songObj.filename) {
-                        const vidUrl = `https://www.youtube-nocookie.com/embed/${data.youtube_id}?autoplay=1&mute=1&controls=0&loop=1&playlist=${data.youtube_id}&modestbranding=1&showinfo=0&disablekb=1&enablejsapi=1&origin=${currentOrigin}`;
-                        document.getElementById('rp-video').src = vidUrl;
+                        if (ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
+                            ytPlayer.loadVideoById({ 'videoId': data.youtube_id, 'startSeconds': 0 });
+                            ytPlayer.mute();
+                        } else {
+                            // Initialize YouTube API player cleanly
+                            ytPlayer = new YT.Player('rp-video', {
+                                height: '337',
+                                width: '600',
+                                videoId: data.youtube_id,
+                                playerVars: {
+                                    'autoplay': 1,
+                                    'controls': 0,
+                                    'disablekb': 1,
+                                    'modestbranding': 1,
+                                    'origin': window.location.origin
+                                },
+                                events: {
+                                    'onReady': (event) => {
+                                        event.target.mute();
+                                        event.target.playVideo();
+                                    }
+                                }
+                            });
+                        }
                         
                         setTimeout(() => {
                             if(currentSongObj.filename === songObj.filename) {
@@ -1125,7 +1252,17 @@ HTML_TEMPLATE = """
                     } else if (data && data.plainLyrics) {
                         lyricsContainer.innerHTML = `<div style="color:var(--subtext); line-height: 2; padding: 0 10px;">${data.plainLyrics.replace(/\\n/g, '<br>')}</div>`;
                     } else {
-                        lyricsContainer.innerHTML = '<div style="color:#555; text-align:center; padding-top:40px;">No lyrics found for this track.</div>';
+                        fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(artist + ' ' + track)}`)
+                            .then(res => res.json())
+                            .then(searchData => {
+                                if(searchData && searchData.length > 0 && searchData[0].syncedLyrics) {
+                                    parseLRCLyrics(searchData[0].syncedLyrics);
+                                } else if(searchData && searchData.length > 0 && searchData[0].plainLyrics) {
+                                    lyricsContainer.innerHTML = `<div style="color:var(--subtext); line-height: 2; padding: 0 10px;">${searchData[0].plainLyrics.replace(/\\n/g, '<br>')}</div>`;
+                                } else {
+                                    lyricsContainer.innerHTML = '<div style="color:#555; text-align:center; padding-top:40px;">No lyrics found for this track.</div>';
+                                }
+                            });
                     }
                 })
                 .catch(err => {
@@ -1276,6 +1413,55 @@ HTML_TEMPLATE = """
 </html>
 """
 
+PUBLIC_PLAYLIST_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ playlist.name }} - Streamer Pro</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root { --bg: #050505; --panel: #121212; --highlight: #222222; --text: #ffffff; --subtext: #a7a7a7; --accent: #1DB954; --card-bg: #181818; }
+        body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 40px; display: flex; flex-direction: column; align-items: center; }
+        .container { width: 100%; max-width: 900px; background: var(--panel); padding: 40px; border-radius: 12px; box-shadow: 0 15px 35px rgba(0,0,0,0.8); border: 1px solid #222; }
+        h1 { margin-top: 0; font-size: 32px; }
+        .song-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--card-bg); border-radius: 8px; margin-bottom: 12px; border: 1px solid #282828; }
+        .song-info { display: flex; align-items: center; gap: 16px; }
+        .song-info img { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; }
+        .primary-btn { background: var(--accent); color: black; border: none; padding: 10px 20px; border-radius: 24px; font-weight: 700; cursor: pointer; text-decoration: none; display: inline-block; }
+        .primary-btn:hover { background: #1ed760; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:30px;">
+            <div>
+                <h1>🎵 {{ playlist.name }}</h1>
+                <p style="color:var(--subtext); margin:0;">Shared Playlist • Created by <strong>{{ playlist.creator }}</strong></p>
+            </div>
+            <a href="/" class="primary-btn"><i class="fas fa-home"></i> Open Streamer Pro</a>
+        </div>
+        
+        <h3>Tracks ({{ songs|length }})</h3>
+        <div style="margin-top:20px;">
+            {% for song in songs %}
+            <div class="song-row">
+                <div class="song-info">
+                    <img src="{{ url_for('local_cover', filename=song.filename) }}" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'48\\' height=\\'48\\' viewBox=\\'0 0 48 48\\'><rect width=\\'48\\' height=\\'48\\' fill=\\'%23222\\'/><text x=\\'50%\\' y=\\'50%\\' fill=\\'%231DB954\\' font-size=\\'20\\' text-anchor=\\'middle\\' dominant-baseline=\\'middle\\'>🎵</text></svg>'">
+                    <div>
+                        <div style="font-weight:700; font-size:15px;">{{ song.title }}</div>
+                        <div style="color:var(--subtext); font-size:13px; margin-top:2px;">{{ song.artist }}</div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>
+"""
+
 # ---------------------------------------------------------
 # ROUTE HANDLERS
 # ---------------------------------------------------------
@@ -1342,6 +1528,79 @@ def api_radio():
     
     next_song_obj = get_radio_recommendation(session['user'], history_list)
     return jsonify({"song": next_song_obj})
+
+# --- PLAYLIST API ROUTES ---
+@app.route('/api/playlists', methods=['GET', 'POST'])
+def api_playlists():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    if 'playlists' not in db: db['playlists'] = {}
+
+    if request.method == 'GET':
+        return jsonify(db['playlists'])
+
+    elif request.method == 'POST':
+        data = request.json
+        name = data.get('name', '').strip()
+        if not name: return jsonify({"success": False, "error": "Playlist name required"})
+        
+        token = uuid.uuid4().hex[:8]
+        db['playlists'][token] = {
+            "name": name,
+            "creator": session['user'],
+            "songs": []
+        }
+        save_db(db)
+        return jsonify({"success": True, "token": token})
+
+@app.route('/api/playlist/<token>', methods=['GET', 'DELETE'])
+def api_playlist_detail(token):
+    db = load_db()
+    playlists = db.get('playlists', {})
+    if token not in playlists: return jsonify({"error": "Playlist not found"}), 404
+
+    if request.method == 'GET':
+        return jsonify(playlists[token])
+
+    elif request.method == 'DELETE':
+        if 'user' not in session or playlists[token]['creator'] != session['user']:
+            return jsonify({"error": "Unauthorized"}), 403
+        del playlists[token]
+        save_db(db)
+        return jsonify({"success": True})
+
+@app.route('/api/playlist/<token>/song', methods=['POST', 'DELETE'])
+def api_playlist_songs(token):
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    playlists = db.get('playlists', {})
+    if token not in playlists: return jsonify({"error": "Playlist not found"}), 404
+
+    data = request.json
+    filename = data.get('filename')
+    if not filename: return jsonify({"success": False, "error": "Filename required"})
+
+    if request.method == 'POST':
+        if filename not in playlists[token]['songs']:
+            playlists[token]['songs'].append(filename)
+            save_db(db)
+        return jsonify({"success": True})
+
+    elif request.method == 'DELETE':
+        if filename in playlists[token]['songs']:
+            playlists[token]['songs'].remove(filename)
+            save_db(db)
+        return jsonify({"success": True})
+
+@app.route('/playlist/<token>')
+def public_playlist_view(token):
+    db = load_db()
+    playlists = db.get('playlists', {})
+    if token not in playlists: return "Playlist not found", 404
+    
+    pl = playlists[token]
+    songs = [get_song_metadata(f) for f in pl['songs'] if os.path.exists(os.path.join(MUSIC_DIR, f))]
+    return render_template_string(PUBLIC_PLAYLIST_TEMPLATE, playlist=pl, songs=songs)
 
 @app.route('/api/status')
 def api_status():
@@ -1451,7 +1710,7 @@ def api_embedded_cover():
                     return Response(pic.data, mimetype=pic.mime)
         if hasattr(audio, 'pictures') and audio.pictures:
             pic = audio.pictures[0]
-            return Response(pic.data, mimetype=pic.mime)
+            return Response(pic.data, mimetype=pic.pic_data if hasattr(pic, 'pic_data') else pic.data)
     except: pass
     return redirect("data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=")
 
@@ -1475,24 +1734,24 @@ def api_cover():
                     rel_img = os.path.relpath(os.path.join(song_dir, f), MUSIC_DIR)
                     local_url = f"/local_cover/{urllib.parse.quote(rel_img)}"
                     cover_cache[cache_key] = local_url
-                    save_covers(cover_cache)
+                    save_json_file(COVERS_FILE, cover_cache)
                     return redirect(local_url)
 
     mb_url = fetch_musicbrainz_cover(artist, song)
     if mb_url:
         cover_cache[cache_key] = mb_url
-        save_covers(cover_cache)
+        save_json_file(COVERS_FILE, cover_cache)
         return redirect(mb_url)
 
     itunes_url = fetch_itunes_cover(artist, song)
     if itunes_url:
         cover_cache[cache_key] = itunes_url
-        save_covers(cover_cache)
+        save_json_file(COVERS_FILE, cover_cache)
         return redirect(itunes_url)
 
     fallback_svg = generate_svg_fallback(song)
     cover_cache[cache_key] = fallback_svg
-    save_covers(cover_cache)
+    save_json_file(COVERS_FILE, cover_cache)
     return redirect(fallback_svg)
 
 @app.route('/api/video')
