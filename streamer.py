@@ -9,6 +9,7 @@ import time
 import urllib.request
 import urllib.parse
 import atexit
+import shutil
 from flask import Flask, request, session, redirect, url_for, render_template_string, jsonify, send_from_directory, Response
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -24,17 +25,32 @@ except ImportError:
 
 PORT = int(os.environ.get("PORT", 8000))
 MUSIC_DIR = os.environ.get("MUSIC_DIR", "./Music")
-os.makedirs(MUSIC_DIR, exist_ok=True)
 
-CACHE_DIR = "./Cache_Art"
+# --- VERCEL SERVERLESS FIX ---
+IS_VERCEL = os.environ.get("VERCEL") == "1"
+
+if IS_VERCEL:
+    CACHE_DIR = "/tmp/Cache_Art"
+    PROFILES_DIR = "/tmp/Profiles"
+    DB_FILE = "/tmp/database.json"
+    METADATA_FILE = "/tmp/metadata_v7.json"
+    VIDEO_CACHE_FILE = "/tmp/videos_v2.json"
+    
+    # Safely copy bundled databases to writable /tmp on cold boot
+    for f in ['database.json', 'metadata_v7.json', 'videos_v2.json']:
+        if os.path.exists(f) and not os.path.exists(f"/tmp/{f}"):
+            try: shutil.copy(f, f"/tmp/{f}")
+            except: pass
+else:
+    os.makedirs(MUSIC_DIR, exist_ok=True)
+    CACHE_DIR = "./Cache_Art"
+    PROFILES_DIR = os.environ.get("PROFILES_DIR", "./Profiles")
+    DB_FILE = 'database.json'
+    METADATA_FILE = 'metadata_v7.json'
+    VIDEO_CACHE_FILE = 'videos_v2.json'
+
 os.makedirs(CACHE_DIR, exist_ok=True)
-
-PROFILES_DIR = os.environ.get("PROFILES_DIR", "./Profiles")
 os.makedirs(PROFILES_DIR, exist_ok=True)
-
-DB_FILE = 'database.json'
-METADATA_FILE = 'metadata_v7.json'
-VIDEO_CACHE_FILE = 'videos_v2.json'
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(32).hex())
@@ -1633,279 +1649,6 @@ HTML_TEMPLATE = """
             }).then(() => loadUsersTable());
         }
 
-        function playQueue(queue, index) {
-            isRadioMode = false;
-            currentQueue = queue;
-            originalQueue = [...queue];
-            currentIndex = index;
-            if(isShuffle) toggleShuffle();
-            loadSong(currentQueue[currentIndex]);
-        }
-
-        function startRadio() {
-            isRadioMode = true;
-            radioHistory = [];
-            contentDiv.innerHTML = `
-                <div class="fade-in" style="text-align:center; margin-top: 100px;">
-                    <i class="fas fa-broadcast-tower" style="font-size: 80px; color: var(--accent); margin-bottom: 20px;"></i>
-                    <h2>Infinite Radio Active</h2>
-                    <p style="color:var(--subtext)">Playing personalized tracks based on your likes and listen time.</p>
-                </div>
-            `;
-            nextTrack();
-        }
-
-        function loadSong(songObj) {
-            currentSongObj = songObj;
-
-            if (isRadioMode) {
-                radioHistory.push(songObj.filename);
-                if (radioHistory.length > 15) radioHistory.shift();
-            }
-
-            audio.src = '/play/' + encodeURIComponent(songObj.filename).replace(/%2F/g, '/');
-            audio.play();
-
-            rightPanel.style.display = 'flex';
-            let coverUrl = getCoverUrl(songObj);
-
-            document.title = "▶ " + songObj.title + " - " + songObj.artist;
-
-            document.getElementById('np-title').innerText = songObj.title;
-            document.getElementById('np-artist').innerText = songObj.artist;
-            document.getElementById('np-cover').src = coverUrl;
-
-            document.getElementById('rp-title').innerText = songObj.title;
-            document.getElementById('rp-artist').innerText = songObj.artist;
-
-            document.getElementById('rp-video-container').style.opacity = '0';
-            document.getElementById('rp-cover').src = coverUrl;
-            document.getElementById('rp-cover').style.opacity = '1';
-            document.getElementById('rp-cover-glow').style.backgroundImage = `url('${coverUrl}')`;
-            
-            // Set Download Link
-            downloadBtn.style.display = "inline-block";
-            downloadBtn.href = '/download/' + encodeURIComponent(songObj.filename).replace(/%2F/g, '/');
-
-            updateMediaSession(songObj, coverUrl);
-            fetchStatusAndLog(songObj.filename);
-            fetchLyrics(songObj.artist, songObj.title);
-            renderQueue(); // Update queue UI on load
-
-            const currentOrigin = encodeURIComponent(window.location.origin);
-
-            fetch(`/api/video?artist=${encodeURIComponent(songObj.artist)}&song=${encodeURIComponent(songObj.title)}`)
-                .then(res => res.json())
-                .then(data => {
-                    if (data.youtube_id && currentSongObj.filename === songObj.filename) {
-                        if (ytPlayerReady && ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
-                            ytPlayer.loadVideoById({ 'videoId': data.youtube_id, 'startSeconds': audio.currentTime });
-                            ytPlayer.mute();
-                        } else if (ytPlayerReady) {
-                            ytPlayer = new YT.Player('rp-video', {
-                                height: '337',
-                                width: '600',
-                                videoId: data.youtube_id,
-                                playerVars: {
-                                    'autoplay': 1,
-                                    'controls': 0,
-                                    'disablekb': 1,
-                                    'modestbranding': 1,
-                                    'start': Math.floor(audio.currentTime),
-                                    'origin': window.location.origin
-                                },
-                                events: {
-                                    'onReady': (event) => {
-                                        event.target.mute();
-                                        event.target.playVideo();
-                                    }
-                                }
-                            });
-                        }
-
-                        setTimeout(() => {
-                            if(currentSongObj.filename === songObj.filename) {
-                                document.getElementById('rp-video-container').style.opacity = '1';
-                            }
-                        }, 1800);
-                    }
-                });
-        }
-
-        function fetchLyrics(artist, track) {
-            lyricsContainer.innerHTML = '<div style="color:#555; text-align:center; padding-top:40px;"><i class="fas fa-spinner fa-spin"></i> Searching lyrics...</div>';
-            syncedLyrics = [];
-            activeLyricIndex = -1;
-
-            fetch(`https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(track)}`)
-                .then(res => res.json())
-                .then(data => {
-                    if (data && data.syncedLyrics) {
-                        parseLRCLyrics(data.syncedLyrics);
-                    } else if (data && data.plainLyrics) {
-                        lyricsContainer.innerHTML = `<div style="color:var(--subtext); line-height: 2; padding: 0 10px;">${data.plainLyrics.replace(/\\n/g, '<br>')}</div>`;
-                    } else {
-                        fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(artist + ' ' + track)}`)
-                            .then(res => res.json())
-                            .then(searchData => {
-                                if(searchData && searchData.length > 0 && searchData[0].syncedLyrics) {
-                                    parseLRCLyrics(searchData[0].syncedLyrics);
-                                } else if(searchData && searchData.length > 0 && searchData[0].plainLyrics) {
-                                    lyricsContainer.innerHTML = `<div style="color:var(--subtext); line-height: 2; padding: 0 10px;">${searchData[0].plainLyrics.replace(/\\n/g, '<br>')}</div>`;
-                                } else {
-                                    lyricsContainer.innerHTML = '<div style="color:#555; text-align:center; padding-top:40px;">No lyrics found for this track.</div>';
-                                }
-                            });
-                    }
-                })
-                .catch(err => {
-                    lyricsContainer.innerHTML = '<div style="color:#555; text-align:center; padding-top:40px;">Failed to load lyrics.</div>';
-                });
-        }
-
-        function parseLRCLyrics(lrcString) {
-            const lines = lrcString.split('\\n');
-            const regex = /\\[(\\d{2}):(\\d{2}\\.\\d{2,3})\\](.*)/;
-            syncedLyrics = [];
-
-            lines.forEach(line => {
-                const match = line.match(regex);
-                if (match) {
-                    const time = (parseInt(match[1]) * 60) + parseFloat(match[2]);
-                    const text = match[3].trim();
-                    if (text !== '') {
-                        const words = text.split(' ').filter(w => w !== '');
-                        syncedLyrics.push({ time, text, words });
-                    }
-                }
-            });
-
-            for (let i = 0; i < syncedLyrics.length; i++) {
-                let gap = 5.0;
-                if (i < syncedLyrics.length - 1) {
-                    gap = syncedLyrics[i+1].time - syncedLyrics[i].time;
-                }
-
-                syncedLyrics[i].duration = Math.min(gap, Math.max(1.5, syncedLyrics[i].words.length * 0.45));
-
-                let totalChars = syncedLyrics[i].words.reduce((sum, w) => sum + w.length, 0);
-                let charAcc = 0;
-                syncedLyrics[i].wordTimings = syncedLyrics[i].words.map(w => {
-                    let startPercent = charAcc / totalChars;
-                    charAcc += w.length;
-                    let endPercent = charAcc / totalChars;
-                    return { startPercent, endPercent };
-                });
-            }
-
-            lyricsContainer.innerHTML = '';
-            syncedLyrics.forEach((line, index) => {
-                const el = document.createElement('div');
-                el.className = 'lyric-line';
-                el.id = `lyric-${index}`;
-
-                let wordsHTML = '';
-                line.words.forEach((word, wIndex) => {
-                    wordsHTML += `<span class="lyric-word" id="word-${index}-${wIndex}">${word}</span> `;
-                });
-                el.innerHTML = wordsHTML;
-
-                el.onclick = () => { audio.currentTime = line.time; audio.play(); };
-                lyricsContainer.appendChild(el);
-            });
-        }
-
-        function fetchStatusAndLog(filename) {
-            fetch('/api/status?song=' + encodeURIComponent(filename))
-                .then(res => res.json())
-                .then(data => {
-                    document.getElementById('like-btn').classList.toggle('active', data.liked);
-                    document.getElementById('dislike-btn').classList.toggle('active', data.disliked);
-                });
-
-            fetch('/api/social/status', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({song: filename})
-            });
-
-            fetch('/api/feedback', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({action: 'listen', song: filename})
-            }).then(() => refreshStatsUI());
-        }
-
-        function nextTrack() {
-            if (isRadioMode) {
-                const historyParam = radioHistory.map(encodeURIComponent).join(',');
-                fetch('/api/radio/next?history=' + historyParam)
-                    .then(res => res.json())
-                    .then(data => {
-                        if(data.song) loadSong(data.song);
-                    });
-            } else if (currentQueue.length > 0) {
-                if (isRepeat) {
-                    audio.currentTime = 0;
-                    audio.play();
-                } else {
-                    currentIndex = (currentIndex + 1) % currentQueue.length;
-                    loadSong(currentQueue[currentIndex]);
-                }
-            }
-        }
-
-        function prevTrack() {
-            if(audio.currentTime > 3) {
-                audio.currentTime = 0;
-            } else if (!isRadioMode && currentQueue.length > 0) {
-                currentIndex = (currentIndex - 1 + currentQueue.length) % currentQueue.length;
-                loadSong(currentQueue[currentIndex]);
-            }
-        }
-
-        function animateButton(btnId) {
-            const btn = document.getElementById(btnId);
-            btn.classList.remove('pop-anim');
-            void btn.offsetWidth;
-            btn.classList.add('pop-anim');
-        }
-
-        function refreshStatsUI() {
-            fetch('/api/data').then(res => res.json()).then(data => {
-                songStats = data.stats;
-                data.songs.forEach(song => {
-                    const el = document.getElementById(`stats-${safeId(song.filename)}`);
-                    if (el) {
-                        let s = songStats[song.filename] || {likes: 0, dislikes: 0};
-                        el.innerHTML = `<span class="stat-like"><i class="fas fa-heart" style="color:var(--accent)"></i> ${s.likes}</span>`;
-                    }
-                });
-            });
-        }
-
-        function sendFeedback(action) {
-            if(!currentSongObj) return;
-            fetch('/api/feedback', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({action: action, song: currentSongObj.filename})
-            }).then(res => res.json()).then(data => {
-                if(action === 'like') {
-                    document.getElementById('like-btn').classList.toggle('active');
-                    document.getElementById('dislike-btn').classList.remove('active');
-                    animateButton('like-btn');
-                } else if(action === 'dislike') {
-                    document.getElementById('dislike-btn').classList.toggle('active');
-                    document.getElementById('like-btn').classList.remove('active');
-                    animateButton('dislike-btn');
-                    if(isRadioMode) nextTrack();
-                }
-                refreshStatsUI();
-            });
-        }
-
-        audio.addEventListener('ended', nextTrack);
     </script>
 {% endif %}
 </body>
@@ -2124,7 +1867,6 @@ def api_friends():
         if f in db["users"]:
             f_data = db["users"][f]
             np = f_data.get('now_playing')
-            # Clear now_playing if older than 2 hours to prevent stale statuses
             if np and (int(time.time()) - np.get('time', 0)) > 7200:
                 np = None
             friends_payload.append({
