@@ -1,0 +1,33 @@
+{
+  "users": {
+    "RW2012": {
+      "password": "scrypt:32768:8:1$Q6YuKrewjm6tSwcT$6285c5fc748d0ac29e68bbcb8a783da24d128c663409b30459b2291d88f2f76ac317c50be001a27f3e6fcfa306cb38270e7b0b5b9a456b7b0ce67a8116f67bbf",
+      "likes": [
+        "01 - JA\u0178-Z - Numb _ Encore.flac",
+        "Ravyn Lenae - Love Me Not.mp3"
+      ],
+      "dislikes": [],
+      "play_counts": {
+        "01 - Evanescence - Going Under.flac": 1,
+        "01 - JA\u0178-Z - Dirt Off Your Shoulder _ Lying From You.flac": 1,
+        "05 - Steve Aoki - Darker Than Blood (feat. Linkin Park).flac": 2,
+        "02 - idontwannabeyouanymore.mp3": 1,
+        "01 - Busta Rhymes - We Made It (feat. Linkin Park).flac": 2,
+        "03 - Linkin Park - Somewhere I Belong.flac": 1,
+        "Noah Kahan - Stick Season.mp3": 1,
+        "Michael Jackson - Beat It.mp3": 1,
+        "01 - Steve Aoki - Darker Than Blood (feat. Linkin Park).flac": 1,
+        "Bebe Rexha - New Religion.mp3": 2,
+        "01 - JA\u0178-Z - Numb _ Encore.flac": 2,
+        "Lil Tecca - Dark Thoughts.mp3": 1,
+        "Teddy Swims - Bad Dreams.mp3": 1,
+        "Ella Langley - Be Her.mp3": 1,
+        "Bad Bunny - DtMF.mp3": 1,
+        "Justin Bieber - DAISIES.mp3": 1,
+        "Ravyn Lenae - Love Me Not.mp3": 1,
+        "Prince - Purple Rain (2015 Paisley Park Remaster).mp3": 1,
+        "Chappell Roan - Pink Pony Club.mp3": 1
+      }
+    }
+  }
+}

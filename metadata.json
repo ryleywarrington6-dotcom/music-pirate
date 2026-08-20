@@ -1,0 +1,954 @@
+{
+  "01 - Busta Rhymes - We Made It (feat. Linkin Park).flac": {
+    "filename": "01 - Busta Rhymes - We Made It (feat. Linkin Park).flac",
+    "artist": "Unknown Artist",
+    "title": "We Made It (feat. Linkin Park)",
+    "has_cover": true,
+    "mtime": 1787137394.1845582
+  },
+  "01 - COPYCAT.mp3": {
+    "filename": "01 - COPYCAT.mp3",
+    "artist": "Billie Eilish",
+    "title": "COPYCAT",
+    "has_cover": true,
+    "mtime": 1787183916.8545563
+  },
+  "01 - Evanescence - Going Under.flac": {
+    "filename": "01 - Evanescence - Going Under.flac",
+    "artist": "Evanescence",
+    "title": "Going Under",
+    "has_cover": false,
+    "mtime": 1787137395.489558
+  },
+  "01 - JA\u0178-Z - Dirt Off Your Shoulder _ Lying From You.flac": {
+    "filename": "01 - JA\u0178-Z - Dirt Off Your Shoulder _ Lying From You.flac",
+    "artist": "Unknown Artist",
+    "title": "Dirt Off Your Shoulder / Lying From You",
+    "has_cover": true,
+    "mtime": 1787137397.127558
+  },
+  "01 - JA\u0178-Z - Numb _ Encore.flac": {
+    "filename": "01 - JA\u0178-Z - Numb _ Encore.flac",
+    "artist": "Unknown Artist",
+    "title": "Numb / Encore",
+    "has_cover": false,
+    "mtime": 1787137397.989558
+  },
+  "01 - Linkin Park - Heavy Is the Crown.flac": {
+    "filename": "01 - Linkin Park - Heavy Is the Crown.flac",
+    "artist": "Linkin Park",
+    "title": "Heavy Is the Crown",
+    "has_cover": true,
+    "mtime": 1787137419.8235567
+  },
+  "01 - Linkin Park - LOST IN THE ECHO.flac": {
+    "filename": "01 - Linkin Park - LOST IN THE ECHO.flac",
+    "artist": "Linkin Park",
+    "title": "LOST IN THE ECHO",
+    "has_cover": true,
+    "mtime": 1787137427.2445562
+  },
+  "01 - Linkin Park - Lost.flac": {
+    "filename": "01 - Linkin Park - Lost.flac",
+    "artist": "Linkin Park",
+    "title": "Lost",
+    "has_cover": true,
+    "mtime": 1787137469.1535537
+  },
+  "01 - Linkin Park - The Emptiness Machine.flac": {
+    "filename": "01 - Linkin Park - The Emptiness Machine.flac",
+    "artist": "Linkin Park",
+    "title": "The Emptiness Machine",
+    "has_cover": true,
+    "mtime": 1787137403.7045577
+  },
+  "01 - Linkin Park - Up From the Bottom.flac": {
+    "filename": "01 - Linkin Park - Up From the Bottom.flac",
+    "artist": "Linkin Park",
+    "title": "Up From the Bottom",
+    "has_cover": true,
+    "mtime": 1787137420.9775565
+  },
+  "01 - Steve Aoki - Darker Than Blood (feat. Linkin Park).flac": {
+    "filename": "01 - Steve Aoki - Darker Than Blood (feat. Linkin Park).flac",
+    "artist": "Unknown Artist",
+    "title": "Darker Than Blood (feat. Linkin Park)",
+    "has_cover": true,
+    "mtime": 1787137421.4165566
+  },
+  "02 - Linkin Park - Don't Stay.flac": {
+    "filename": "02 - Linkin Park - Don't Stay.flac",
+    "artist": "Linkin Park",
+    "title": "Don't Stay",
+    "has_cover": true,
+    "mtime": 1787137474.4925535
+  },
+  "02 - Linkin Park - Good Goodbye (feat. Pusha T and Stormzy).flac": {
+    "filename": "02 - Linkin Park - Good Goodbye (feat. Pusha T and Stormzy).flac",
+    "artist": "Unknown Artist",
+    "title": "Good Goodbye (feat. Pusha T and Stormzy)",
+    "has_cover": true,
+    "mtime": 1787137446.126555
+  },
+  "02 - idontwannabeyouanymore.mp3": {
+    "filename": "02 - idontwannabeyouanymore.mp3",
+    "artist": "Billie Eilish",
+    "title": "idontwannabeyouanymore",
+    "has_cover": true,
+    "mtime": 1787183918.1095564
+  },
+  "03 - Linkin Park - Somewhere I Belong.flac": {
+    "filename": "03 - Linkin Park - Somewhere I Belong.flac",
+    "artist": "Linkin Park",
+    "title": "Somewhere I Belong",
+    "has_cover": true,
+    "mtime": 1787137459.2175543
+  },
+  "03 - Linkin Park - With You.flac": {
+    "filename": "03 - Linkin Park - With You.flac",
+    "artist": "Linkin Park",
+    "title": "With You",
+    "has_cover": true,
+    "mtime": 1787137459.6965542
+  },
+  "03 - my boy.mp3": {
+    "filename": "03 - my boy.mp3",
+    "artist": "Billie Eilish",
+    "title": "my boy",
+    "has_cover": true,
+    "mtime": 1787183919.1045563
+  },
+  "04 - Linkin Park - Lying from You.flac": {
+    "filename": "04 - Linkin Park - Lying from You.flac",
+    "artist": "Linkin Park",
+    "title": "Lying from You",
+    "has_cover": true,
+    "mtime": 1787137438.5735555
+  },
+  "04 - watch.mp3": {
+    "filename": "04 - watch.mp3",
+    "artist": "Billie Eilish",
+    "title": "watch",
+    "has_cover": true,
+    "mtime": 1787183920.8065565
+  },
+  "05 - JA\u0178-Z - Izzo _ In the End.flac": {
+    "filename": "05 - JA\u0178-Z - Izzo _ In the End.flac",
+    "artist": "Unknown Artist",
+    "title": "Izzo / In the End",
+    "has_cover": true,
+    "mtime": 1787137413.714557
+  },
+  "05 - Linkin Park - Shadow of the Day.flac": {
+    "filename": "05 - Linkin Park - Shadow of the Day.flac",
+    "artist": "Linkin Park",
+    "title": "Shadow of the Day",
+    "has_cover": true,
+    "mtime": 1787137474.2795534
+  },
+  "05 - Steve Aoki - Darker Than Blood (feat. Linkin Park).flac": {
+    "filename": "05 - Steve Aoki - Darker Than Blood (feat. Linkin Park).flac",
+    "artist": "Unknown Artist",
+    "title": "Darker Than Blood (feat. Linkin Park)",
+    "has_cover": true,
+    "mtime": 1787137458.0005543
+  },
+  "05 - party favor.mp3": {
+    "filename": "05 - party favor.mp3",
+    "artist": "Billie Eilish",
+    "title": "party favor",
+    "has_cover": true,
+    "mtime": 1787183922.7355564
+  },
+  "06 - Linkin Park - Heavy (feat. Kiiara) (1).flac": {
+    "filename": "06 - Linkin Park - Heavy (feat. Kiiara) (1).flac",
+    "artist": "Unknown Artist",
+    "title": "Heavy (feat. Kiiara)",
+    "has_cover": true,
+    "mtime": 1787137418.4185567
+  },
+  "06 - Linkin Park - Heavy (feat. Kiiara).flac": {
+    "filename": "06 - Linkin Park - Heavy (feat. Kiiara).flac",
+    "artist": "Unknown Artist",
+    "title": "Heavy (feat. Kiiara)",
+    "has_cover": true,
+    "mtime": 1787137416.8315568
+  },
+  "06 - bellyache.mp3": {
+    "filename": "06 - bellyache.mp3",
+    "artist": "Billie Eilish",
+    "title": "bellyache",
+    "has_cover": true,
+    "mtime": 1787183922.7125564
+  },
+  "07 - ocean eyes.mp3": {
+    "filename": "07 - ocean eyes.mp3",
+    "artist": "Billie Eilish",
+    "title": "ocean eyes",
+    "has_cover": true,
+    "mtime": 1787183923.1575563
+  },
+  "08 - Linkin Park - Figure.09.flac": {
+    "filename": "08 - Linkin Park - Figure.09.flac",
+    "artist": "Linkin Park",
+    "title": "Figure.09",
+    "has_cover": true,
+    "mtime": 1787137475.8905532
+  },
+  "08 - Linkin Park - Two Faced.flac": {
+    "filename": "08 - Linkin Park - Two Faced.flac",
+    "artist": "Linkin Park",
+    "title": "Two Faced",
+    "has_cover": true,
+    "mtime": 1787137461.8475542
+  },
+  "08 - hostage.mp3": {
+    "filename": "08 - hostage.mp3",
+    "artist": "Billie Eilish",
+    "title": "hostage",
+    "has_cover": true,
+    "mtime": 1787183923.5725565
+  },
+  "09 - &burn.mp3": {
+    "filename": "09 - &burn.mp3",
+    "artist": "Unknown Artist",
+    "title": "&burn",
+    "has_cover": true,
+    "mtime": 1787183923.4715564
+  },
+  "09 - Linkin Park - A Place for My Head.flac": {
+    "filename": "09 - Linkin Park - A Place for My Head.flac",
+    "artist": "Linkin Park",
+    "title": "A Place for My Head",
+    "has_cover": true,
+    "mtime": 1787137475.4495533
+  },
+  "10 - lovely.mp3": {
+    "filename": "10 - lovely.mp3",
+    "artist": "Unknown Artist",
+    "title": "lovely",
+    "has_cover": true,
+    "mtime": 1787183897.568556
+  },
+  "11 - Linkin Park - Good Things Go.flac": {
+    "filename": "11 - Linkin Park - Good Things Go.flac",
+    "artist": "Linkin Park",
+    "title": "Good Things Go",
+    "has_cover": true,
+    "mtime": 1787137463.268554
+  },
+  "11 - bitches broken hearts.mp3": {
+    "filename": "11 - bitches broken hearts.mp3",
+    "artist": "Billie Eilish",
+    "title": "bitches broken hearts",
+    "has_cover": true,
+    "mtime": 1787183897.358556
+  },
+  "12 - Linkin Park - Session.flac": {
+    "filename": "12 - Linkin Park - Session.flac",
+    "artist": "Linkin Park",
+    "title": "Session",
+    "has_cover": true,
+    "mtime": 1787137476.9575534
+  },
+  "14 - Linkin Park - High Voltage.flac": {
+    "filename": "14 - Linkin Park - High Voltage.flac",
+    "artist": "Linkin Park",
+    "title": "High Voltage",
+    "has_cover": true,
+    "mtime": 1787137472.7895534
+  },
+  "ANOTR - Talk To You (ft. 54 Ultra).mp3": {
+    "filename": "ANOTR - Talk To You (ft. 54 Ultra).mp3",
+    "artist": "Unknown Artist",
+    "title": "Talk To You (ft. 54 Ultra)",
+    "has_cover": true,
+    "mtime": 1787182917.089544
+  },
+  "Addison Rae - Fame is a Gun.mp3": {
+    "filename": "Addison Rae - Fame is a Gun.mp3",
+    "artist": "Addison Rae",
+    "title": "Fame is a Gun",
+    "has_cover": true,
+    "mtime": 1787182917.0195441
+  },
+  "Alex Warren - FEVER DREAM.mp3": {
+    "filename": "Alex Warren - FEVER DREAM.mp3",
+    "artist": "Alex Warren",
+    "title": "FEVER DREAM",
+    "has_cover": true,
+    "mtime": 1787182915.7595441
+  },
+  "Alex Warren - Ordinary.mp3": {
+    "filename": "Alex Warren - Ordinary.mp3",
+    "artist": "Alex Warren",
+    "title": "Ordinary",
+    "has_cover": true,
+    "mtime": 1787182917.153544
+  },
+  "Ariana Grande - hate that i made you love me.mp3": {
+    "filename": "Ariana Grande - hate that i made you love me.mp3",
+    "artist": "Ariana Grande",
+    "title": "hate that i made you love me",
+    "has_cover": true,
+    "mtime": 1787182916.743544
+  },
+  "Ariana Grande - we can't be friends (wait for your love).mp3": {
+    "filename": "Ariana Grande - we can't be friends (wait for your love).mp3",
+    "artist": "Ariana Grande",
+    "title": "we can't be friends (wait for your love)",
+    "has_cover": true,
+    "mtime": 1787182917.238544
+  },
+  "Bad Bunny - DtMF.mp3": {
+    "filename": "Bad Bunny - DtMF.mp3",
+    "artist": "Bad Bunny",
+    "title": "DtMF",
+    "has_cover": true,
+    "mtime": 1787182917.145544
+  },
+  "Bad Bunny - EoO.mp3": {
+    "filename": "Bad Bunny - EoO.mp3",
+    "artist": "Bad Bunny",
+    "title": "EoO",
+    "has_cover": true,
+    "mtime": 1787182917.0585442
+  },
+  "Bebe Rexha - New Religion.mp3": {
+    "filename": "Bebe Rexha - New Religion.mp3",
+    "artist": "Unknown Artist",
+    "title": "New Religion",
+    "has_cover": true,
+    "mtime": 1787182916.539544
+  },
+  "Bella Kay - iloveitiloveitiloveit.mp3": {
+    "filename": "Bella Kay - iloveitiloveitiloveit.mp3",
+    "artist": "Bella Kay",
+    "title": "iloveitiloveitiloveit",
+    "has_cover": true,
+    "mtime": 1787182916.721544
+  },
+  "Benson Boone - Beautiful Things.mp3": {
+    "filename": "Benson Boone - Beautiful Things.mp3",
+    "artist": "Benson Boone",
+    "title": "Beautiful Things",
+    "has_cover": true,
+    "mtime": 1787182916.971544
+  },
+  "Billie Eilish - BIRDS OF A FEATHER.mp3": {
+    "filename": "Billie Eilish - BIRDS OF A FEATHER.mp3",
+    "artist": "Billie Eilish",
+    "title": "BIRDS OF A FEATHER",
+    "has_cover": true,
+    "mtime": 1787182916.575544
+  },
+  "Blondie - Call Me.mp3": {
+    "filename": "Blondie - Call Me.mp3",
+    "artist": "Blondie",
+    "title": "Call Me",
+    "has_cover": true,
+    "mtime": 1787182917.082544
+  },
+  "Bon Jovi - Livin' On A Prayer.mp3": {
+    "filename": "Bon Jovi - Livin' On A Prayer.mp3",
+    "artist": "Bon Jovi",
+    "title": "Livin' On A Prayer",
+    "has_cover": true,
+    "mtime": 1787182917.539544
+  },
+  "Bruce Springsteen - Dancing In the Dark.mp3": {
+    "filename": "Bruce Springsteen - Dancing In the Dark.mp3",
+    "artist": "Bruce Springsteen",
+    "title": "Dancing In the Dark",
+    "has_cover": true,
+    "mtime": 1787182917.412544
+  },
+  "Bruno Mars - I Just Might.mp3": {
+    "filename": "Bruno Mars - I Just Might.mp3",
+    "artist": "Bruno Mars",
+    "title": "I Just Might",
+    "has_cover": true,
+    "mtime": 1787182916.965544
+  },
+  "Chappell Roan - Good Luck, Babe!.mp3": {
+    "filename": "Chappell Roan - Good Luck, Babe!.mp3",
+    "artist": "Chappell Roan",
+    "title": "Good Luck, Babe!",
+    "has_cover": true,
+    "mtime": 1787182917.1935441
+  },
+  "Chappell Roan - Pink Pony Club.mp3": {
+    "filename": "Chappell Roan - Pink Pony Club.mp3",
+    "artist": "Chappell Roan",
+    "title": "Pink Pony Club",
+    "has_cover": true,
+    "mtime": 1787182918.072544
+  },
+  "Charli xcx - Apple.mp3": {
+    "filename": "Charli xcx - Apple.mp3",
+    "artist": "Charli XCX",
+    "title": "Apple",
+    "has_cover": true,
+    "mtime": 1787182916.204544
+  },
+  "Chris Brown - Residuals.mp3": {
+    "filename": "Chris Brown - Residuals.mp3",
+    "artist": "Chris Brown",
+    "title": "Residuals",
+    "has_cover": true,
+    "mtime": 1787182921.141544
+  },
+  "Clairo - Juna.mp3": {
+    "filename": "Clairo - Juna.mp3",
+    "artist": "Clairo",
+    "title": "Juna",
+    "has_cover": true,
+    "mtime": 1787182921.3845441
+  },
+  "Corbyn Besson - Blink.mp3": {
+    "filename": "Corbyn Besson - Blink.mp3",
+    "artist": "Unknown Artist",
+    "title": "Blink",
+    "has_cover": true,
+    "mtime": 1787182919.678544
+  },
+  "Cyndi Lauper - Girls Just Want to Have Fun.mp3": {
+    "filename": "Cyndi Lauper - Girls Just Want to Have Fun.mp3",
+    "artist": "Cyndi Lauper",
+    "title": "Girls Just Want to Have Fun",
+    "has_cover": true,
+    "mtime": 1787182922.306544
+  },
+  "Disco Lines - No Broke Boys.mp3": {
+    "filename": "Disco Lines - No Broke Boys.mp3",
+    "artist": "Unknown Artist",
+    "title": "No Broke Boys",
+    "has_cover": true,
+    "mtime": 1787182921.743544
+  },
+  "Djo - End of Beginning.mp3": {
+    "filename": "Djo - End of Beginning.mp3",
+    "artist": "Djo",
+    "title": "End of Beginning",
+    "has_cover": true,
+    "mtime": 1787182921.658544
+  },
+  "Doechii - Anxiety.mp3": {
+    "filename": "Doechii - Anxiety.mp3",
+    "artist": "Doechii",
+    "title": "Anxiety",
+    "has_cover": true,
+    "mtime": 1787182923.1065443
+  },
+  "Dominic Fike - Babydoll.mp3": {
+    "filename": "Dominic Fike - Babydoll.mp3",
+    "artist": "Dominic Fike",
+    "title": "Babydoll",
+    "has_cover": true,
+    "mtime": 1787182919.911544
+  },
+  "Drake - Janice STFU.mp3": {
+    "filename": "Drake - Janice STFU.mp3",
+    "artist": "Drake",
+    "title": "Janice STFU",
+    "has_cover": true,
+    "mtime": 1787182923.119544
+  },
+  "Ella Langley - Be Her.mp3": {
+    "filename": "Ella Langley - Be Her.mp3",
+    "artist": "Ella Langley",
+    "title": "Be Her",
+    "has_cover": true,
+    "mtime": 1787182923.194544
+  },
+  "Ella Langley - Choosin' Texas.mp3": {
+    "filename": "Ella Langley - Choosin' Texas.mp3",
+    "artist": "Ella Langley",
+    "title": "Choosin' Texas",
+    "has_cover": true,
+    "mtime": 1787182923.4425442
+  },
+  "Ella Langley - I Can't Love You Anymore.mp3": {
+    "filename": "Ella Langley - I Can't Love You Anymore.mp3",
+    "artist": "Unknown Artist",
+    "title": "I Can't Love You Anymore",
+    "has_cover": true,
+    "mtime": 1787182923.385544
+  },
+  "Fleetwood Mac - Everywhere.mp3": {
+    "filename": "Fleetwood Mac - Everywhere.mp3",
+    "artist": "Fleetwood Mac",
+    "title": "Everywhere",
+    "has_cover": true,
+    "mtime": 1787182923.4885442
+  },
+  "Fontaines D.C. - Marianne.mp3": {
+    "filename": "Fontaines D.C. - Marianne.mp3",
+    "artist": "Fontaines D.C.",
+    "title": "Marianne",
+    "has_cover": true,
+    "mtime": 1787182923.7685442
+  },
+  "Gracie Abrams - That\u2019s So True.mp3": {
+    "filename": "Gracie Abrams - That\u2019s So True.mp3",
+    "artist": "Gracie Abrams",
+    "title": "That\u2019s So True",
+    "has_cover": true,
+    "mtime": 1787182922.8895442
+  },
+  "Guns N' Roses - Sweet Child O' Mine.mp3": {
+    "filename": "Guns N' Roses - Sweet Child O' Mine.mp3",
+    "artist": "Guns N' Roses",
+    "title": "Sweet Child O' Mine",
+    "has_cover": true,
+    "mtime": 1787182925.148544
+  },
+  "HUGEL - Movin' To The Sun.mp3": {
+    "filename": "HUGEL - Movin' To The Sun.mp3",
+    "artist": "Unknown Artist",
+    "title": "Movin' To The Sun",
+    "has_cover": true,
+    "mtime": 1787182922.756544
+  },
+  "Harry Styles - American Girls.mp3": {
+    "filename": "Harry Styles - American Girls.mp3",
+    "artist": "Harry Styles",
+    "title": "American Girls",
+    "has_cover": true,
+    "mtime": 1787182923.3145442
+  },
+  "Justin Bieber - DAISIES.mp3": {
+    "filename": "Justin Bieber - DAISIES.mp3",
+    "artist": "Justin Bieber",
+    "title": "DAISIES",
+    "has_cover": true,
+    "mtime": 1787182924.1175442
+  },
+  "KATSEYE - Animal.mp3": {
+    "filename": "KATSEYE - Animal.mp3",
+    "artist": "KATSEYE",
+    "title": "Animal",
+    "has_cover": true,
+    "mtime": 1787182924.9615443
+  },
+  "Kacey Musgraves - Mexico Honey.mp3": {
+    "filename": "Kacey Musgraves - Mexico Honey.mp3",
+    "artist": "Kacey Musgraves",
+    "title": "Mexico Honey",
+    "has_cover": true,
+    "mtime": 1787182924.1075442
+  },
+  "Kehlani - Folded.mp3": {
+    "filename": "Kehlani - Folded.mp3",
+    "artist": "Kehlani",
+    "title": "Folded",
+    "has_cover": true,
+    "mtime": 1787182925.6465442
+  },
+  "Lady Gaga - Die With A Smile.mp3": {
+    "filename": "Lady Gaga - Die With A Smile.mp3",
+    "artist": "Unknown Artist",
+    "title": "Die With A Smile",
+    "has_cover": true,
+    "mtime": 1787182925.8715441
+  },
+  "Leon Thomas - MUTT.mp3": {
+    "filename": "Leon Thomas - MUTT.mp3",
+    "artist": "Leon Thomas",
+    "title": "MUTT",
+    "has_cover": true,
+    "mtime": 1787182925.4165442
+  },
+  "Lil Tecca - Dark Thoughts.mp3": {
+    "filename": "Lil Tecca - Dark Thoughts.mp3",
+    "artist": "Lil Tecca",
+    "title": "Dark Thoughts",
+    "has_cover": true,
+    "mtime": 1787182925.520544
+  },
+  "Lola Young - Messy.mp3": {
+    "filename": "Lola Young - Messy.mp3",
+    "artist": "Lola Young",
+    "title": "Messy",
+    "has_cover": true,
+    "mtime": 1787182927.151544
+  },
+  "Luke Combs - Be By You.mp3": {
+    "filename": "Luke Combs - Be By You.mp3",
+    "artist": "Luke Combs",
+    "title": "Be By You",
+    "has_cover": true,
+    "mtime": 1787182926.957544
+  },
+  "Luke Combs - Sleepless in a Hotel Room.mp3": {
+    "filename": "Luke Combs - Sleepless in a Hotel Room.mp3",
+    "artist": "Luke Combs",
+    "title": "Sleepless in a Hotel Room",
+    "has_cover": true,
+    "mtime": 1787182927.388544
+  },
+  "Malcolm Todd - Earrings.mp3": {
+    "filename": "Malcolm Todd - Earrings.mp3",
+    "artist": "Unknown Artist",
+    "title": "Earrings",
+    "has_cover": true,
+    "mtime": 1787182927.1805441
+  },
+  "Megan Moroney - Am I Okay_.mp3": {
+    "filename": "Megan Moroney - Am I Okay_.mp3",
+    "artist": "Megan Moroney",
+    "title": "Am I Okay?",
+    "has_cover": true,
+    "mtime": 1787182929.0405443
+  },
+  "Michael Jackson - Beat It.mp3": {
+    "filename": "Michael Jackson - Beat It.mp3",
+    "artist": "Michael Jackson",
+    "title": "Beat It",
+    "has_cover": true,
+    "mtime": 1787182929.8725443
+  },
+  "Michael Jackson - Billie Jean.mp3": {
+    "filename": "Michael Jackson - Billie Jean.mp3",
+    "artist": "Michael Jackson",
+    "title": "Billie Jean",
+    "has_cover": true,
+    "mtime": 1787182929.8615441
+  },
+  "Miley Cyrus - Flowers.mp3": {
+    "filename": "Miley Cyrus - Flowers.mp3",
+    "artist": "Miley Cyrus",
+    "title": "Flowers",
+    "has_cover": true,
+    "mtime": 1787182928.1215441
+  },
+  "Morgan Wallen - Just In Case.mp3": {
+    "filename": "Morgan Wallen - Just In Case.mp3",
+    "artist": "Morgan Wallen",
+    "title": "Just In Case",
+    "has_cover": true,
+    "mtime": 1787182928.6455443
+  },
+  "Myles Smith - Stargazing.mp3": {
+    "filename": "Myles Smith - Stargazing.mp3",
+    "artist": "Myles Smith",
+    "title": "Stargazing",
+    "has_cover": true,
+    "mtime": 1787182928.230544
+  },
+  "Noah Kahan - Stick Season.mp3": {
+    "filename": "Noah Kahan - Stick Season.mp3",
+    "artist": "Noah Kahan",
+    "title": "Stick Season",
+    "has_cover": true,
+    "mtime": 1787182928.6015441
+  },
+  "Oasis - Wonderwall.mp3": {
+    "filename": "Oasis - Wonderwall.mp3",
+    "artist": "Oasis",
+    "title": "Wonderwall",
+    "has_cover": true,
+    "mtime": 1787182931.2065442
+  },
+  "Olivia Dean - Man I Need.mp3": {
+    "filename": "Olivia Dean - Man I Need.mp3",
+    "artist": "Olivia Dean",
+    "title": "Man I Need",
+    "has_cover": true,
+    "mtime": 1787182929.7395442
+  },
+  "Olivia Dean - So Easy (To Fall In Love).mp3": {
+    "filename": "Olivia Dean - So Easy (To Fall In Love).mp3",
+    "artist": "Olivia Dean",
+    "title": "So Easy (To Fall In Love)",
+    "has_cover": true,
+    "mtime": 1787182929.0345442
+  },
+  "Olivia Rodrigo - drop dead.mp3": {
+    "filename": "Olivia Rodrigo - drop dead.mp3",
+    "artist": "Olivia Rodrigo",
+    "title": "drop dead",
+    "has_cover": true,
+    "mtime": 1787182930.6435442
+  },
+  "Olivia Rodrigo - maggots for brains.mp3": {
+    "filename": "Olivia Rodrigo - maggots for brains.mp3",
+    "artist": "Olivia Rodrigo",
+    "title": "maggots for brains",
+    "has_cover": true,
+    "mtime": 1787182931.4215443
+  },
+  "Olivia Rodrigo - stupid song.mp3": {
+    "filename": "Olivia Rodrigo - stupid song.mp3",
+    "artist": "Olivia Rodrigo",
+    "title": "stupid song",
+    "has_cover": true,
+    "mtime": 1787182930.3385441
+  },
+  "Olivia Rodrigo - the cure.mp3": {
+    "filename": "Olivia Rodrigo - the cure.mp3",
+    "artist": "Olivia Rodrigo",
+    "title": "the cure",
+    "has_cover": true,
+    "mtime": 1787182931.8265443
+  },
+  "PinkPantheress - Stateside + Zara Larsson.mp3": {
+    "filename": "PinkPantheress - Stateside + Zara Larsson.mp3",
+    "artist": "Unknown Artist",
+    "title": "Stateside + Zara Larsson",
+    "has_cover": true,
+    "mtime": 1787182930.9975443
+  },
+  "Post Malone - I Had Some Help.mp3": {
+    "filename": "Post Malone - I Had Some Help.mp3",
+    "artist": "Unknown Artist",
+    "title": "I Had Some Help",
+    "has_cover": true,
+    "mtime": 1787182931.1155443
+  },
+  "Prince - Purple Rain (2015 Paisley Park Remaster).mp3": {
+    "filename": "Prince - Purple Rain (2015 Paisley Park Remaster).mp3",
+    "artist": "Prince",
+    "title": "Purple Rain (2015 Paisley Park Remaster)",
+    "has_cover": true,
+    "mtime": 1787182935.3785443
+  },
+  "Prospa - Free Your Mind.mp3": {
+    "filename": "Prospa - Free Your Mind.mp3",
+    "artist": "Unknown Artist",
+    "title": "Free Your Mind",
+    "has_cover": true,
+    "mtime": 1787182932.3585443
+  },
+  "RAYE - WHERE IS MY HUSBAND!.mp3": {
+    "filename": "RAYE - WHERE IS MY HUSBAND!.mp3",
+    "artist": "RAYE",
+    "title": "WHERE IS MY HUSBAND!",
+    "has_cover": true,
+    "mtime": 1787182932.4805443
+  },
+  "Ravyn Lenae - Love Me Not.mp3": {
+    "filename": "Ravyn Lenae - Love Me Not.mp3",
+    "artist": "Ravyn Lenae",
+    "title": "Love Me Not",
+    "has_cover": true,
+    "mtime": 1787182932.2855442
+  },
+  "SIENNA SPIRO - Great Expectation.mp3": {
+    "filename": "SIENNA SPIRO - Great Expectation.mp3",
+    "artist": "Sienna Spiro",
+    "title": "Great Expectation",
+    "has_cover": true,
+    "mtime": 1787182935.1985443
+  },
+  "STELLA LEFTY - Boston.mp3": {
+    "filename": "STELLA LEFTY - Boston.mp3",
+    "artist": "Unknown Artist",
+    "title": "Boston",
+    "has_cover": true,
+    "mtime": 1787182936.5695443
+  },
+  "Sabrina Carpenter - Espresso.mp3": {
+    "filename": "Sabrina Carpenter - Espresso.mp3",
+    "artist": "Sabrina Carpenter",
+    "title": "Espresso",
+    "has_cover": true,
+    "mtime": 1787182933.5285442
+  },
+  "Sabrina Carpenter - Manchild.mp3": {
+    "filename": "Sabrina Carpenter - Manchild.mp3",
+    "artist": "Sabrina Carpenter",
+    "title": "Manchild",
+    "has_cover": true,
+    "mtime": 1787182934.2925444
+  },
+  "Sabrina Carpenter - Please Please Please.mp3": {
+    "filename": "Sabrina Carpenter - Please Please Please.mp3",
+    "artist": "Sabrina Carpenter",
+    "title": "Please Please Please",
+    "has_cover": true,
+    "mtime": 1787182933.9235442
+  },
+  "Sam Fender - Rein Me In.mp3": {
+    "filename": "Sam Fender - Rein Me In.mp3",
+    "artist": "Unknown Artist",
+    "title": "Rein Me In",
+    "has_cover": true,
+    "mtime": 1787182936.3215444
+  },
+  "Shaboozey - A Bar Song (Tipsy).mp3": {
+    "filename": "Shaboozey - A Bar Song (Tipsy).mp3",
+    "artist": "Shaboozey",
+    "title": "A Bar Song (Tipsy)",
+    "has_cover": true,
+    "mtime": 1787182934.6845443
+  },
+  "Shaboozey - Good News.mp3": {
+    "filename": "Shaboozey - Good News.mp3",
+    "artist": "Shaboozey",
+    "title": "Good News",
+    "has_cover": true,
+    "mtime": 1787182934.2845442
+  },
+  "Shakira - Dai Dai.mp3": {
+    "filename": "Shakira - Dai Dai.mp3",
+    "artist": "Unknown Artist",
+    "title": "Dai Dai",
+    "has_cover": true,
+    "mtime": 1787182934.9355443
+  },
+  "Steve Lacy - oh yeah_.mp3": {
+    "filename": "Steve Lacy - oh yeah_.mp3",
+    "artist": "Steve Lacy",
+    "title": "oh yeah?",
+    "has_cover": true,
+    "mtime": 1787182936.3675444
+  },
+  "Steve Lacy - the feeling.mp3": {
+    "filename": "Steve Lacy - the feeling.mp3",
+    "artist": "Steve Lacy",
+    "title": "the feeling",
+    "has_cover": true,
+    "mtime": 1787182937.3515444
+  },
+  "Tame Impala - Dracula (JENNIE Remix).mp3": {
+    "filename": "Tame Impala - Dracula (JENNIE Remix).mp3",
+    "artist": "Unknown Artist",
+    "title": "Dracula (JENNIE Remix)",
+    "has_cover": true,
+    "mtime": 1787182937.2675443
+  },
+  "Tame Impala - Loser.mp3": {
+    "filename": "Tame Impala - Loser.mp3",
+    "artist": "Tame Impala",
+    "title": "Loser",
+    "has_cover": true,
+    "mtime": 1787182937.7615442
+  },
+  "Tate McRae - Just Keep Watching (From F1\u00ae The Movie).mp3": {
+    "filename": "Tate McRae - Just Keep Watching (From F1\u00ae The Movie).mp3",
+    "artist": "Tate McRae",
+    "title": "Just Keep Watching (From F1\u00ae The Movie)",
+    "has_cover": true,
+    "mtime": 1787182937.3615444
+  },
+  "Taylor Swift - I Knew It, I Knew You (From _Toy Story 5_).mp3": {
+    "filename": "Taylor Swift - I Knew It, I Knew You (From _Toy Story 5_).mp3",
+    "artist": "Taylor Swift",
+    "title": "I Knew It, I Knew You (From \"Toy Story 5\")",
+    "has_cover": true,
+    "mtime": 1787182937.5715444
+  },
+  "Taylor Swift - Opalite.mp3": {
+    "filename": "Taylor Swift - Opalite.mp3",
+    "artist": "Taylor Swift",
+    "title": "Opalite",
+    "has_cover": true,
+    "mtime": 1787182937.4975443
+  },
+  "Taylor Swift - The Fate of Ophelia.mp3": {
+    "filename": "Taylor Swift - The Fate of Ophelia.mp3",
+    "artist": "Taylor Swift",
+    "title": "The Fate of Ophelia",
+    "has_cover": true,
+    "mtime": 1787182938.1555443
+  },
+  "Tears For Fears - Everybody Wants To Rule The World.mp3": {
+    "filename": "Tears For Fears - Everybody Wants To Rule The World.mp3",
+    "artist": "Tears for Fears",
+    "title": "Everybody Wants To Rule The World",
+    "has_cover": true,
+    "mtime": 1787182938.4825444
+  },
+  "Teddy Swims - Bad Dreams.mp3": {
+    "filename": "Teddy Swims - Bad Dreams.mp3",
+    "artist": "Teddy Swims",
+    "title": "Bad Dreams",
+    "has_cover": true,
+    "mtime": 1787182938.8535442
+  },
+  "Teddy Swims - Lose Control.mp3": {
+    "filename": "Teddy Swims - Lose Control.mp3",
+    "artist": "Teddy Swims",
+    "title": "Lose Control",
+    "has_cover": true,
+    "mtime": 1787182938.7255442
+  },
+  "Temper City - Self Aware.mp3": {
+    "filename": "Temper City - Self Aware.mp3",
+    "artist": "Temper City",
+    "title": "Self Aware",
+    "has_cover": true,
+    "mtime": 1787182939.0335443
+  },
+  "The Clash - Should I Stay or Should I Go (Remastered).mp3": {
+    "filename": "The Clash - Should I Stay or Should I Go (Remastered).mp3",
+    "artist": "The Clash",
+    "title": "Should I Stay or Should I Go (Remastered)",
+    "has_cover": true,
+    "mtime": 1787182939.1265442
+  },
+  "The Goo Goo Dolls - Iris.mp3": {
+    "filename": "The Goo Goo Dolls - Iris.mp3",
+    "artist": "Goo Goo Dolls",
+    "title": "Iris",
+    "has_cover": true,
+    "mtime": 1787182939.2975442
+  },
+  "The Killers - Mr. Brightside.mp3": {
+    "filename": "The Killers - Mr. Brightside.mp3",
+    "artist": "The Killers",
+    "title": "Mr. Brightside",
+    "has_cover": true,
+    "mtime": 1787182939.5055444
+  },
+  "WizTheMc - Show Me Love.mp3": {
+    "filename": "WizTheMc - Show Me Love.mp3",
+    "artist": "Unknown Artist",
+    "title": "Show Me Love",
+    "has_cover": true,
+    "mtime": 1787182939.6405444
+  },
+  "Yung Miami - Spend Dat.mp3": {
+    "filename": "Yung Miami - Spend Dat.mp3",
+    "artist": "Yung Miami",
+    "title": "Spend Dat",
+    "has_cover": true,
+    "mtime": 1787182939.7955444
+  },
+  "Zara Larsson - Midnight Sun.mp3": {
+    "filename": "Zara Larsson - Midnight Sun.mp3",
+    "artist": "Zara Larsson",
+    "title": "Midnight Sun",
+    "has_cover": true,
+    "mtime": 1787182939.8665442
+  },
+  "a-ha - Take on Me.mp3": {
+    "filename": "a-ha - Take on Me.mp3",
+    "artist": "a-ha",
+    "title": "Take on Me",
+    "has_cover": true,
+    "mtime": 1787182917.0025442
+  },
+  "sombr - 12 to 12.mp3": {
+    "filename": "sombr - 12 to 12.mp3",
+    "artist": "sombr",
+    "title": "12 to 12",
+    "has_cover": true,
+    "mtime": 1787182935.9225442
+  },
+  "sombr - Homewrecker.mp3": {
+    "filename": "sombr - Homewrecker.mp3",
+    "artist": "sombr",
+    "title": "Homewrecker",
+    "has_cover": true,
+    "mtime": 1787182936.1665442
+  },
+  "sombr - back to friends.mp3": {
+    "filename": "sombr - back to friends.mp3",
+    "artist": "sombr",
+    "title": "back to friends",
+    "has_cover": true,
+    "mtime": 1787182935.8405442
+  }
+}
