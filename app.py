@@ -1170,192 +1170,6 @@ HTML_TEMPLATE = """
             }
         }
 
-        function startRadio() {
-            isRadioMode = true;
-            radioHistory = [];
-            currentQueue = [];
-            document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
-            document.querySelectorAll('.nav-item')[5].classList.add('active');
-            nextTrack();
-        }
-
-        function loadTrack(songObj) {
-            if (!songObj) return;
-            currentSongObj = songObj;
-            
-            let fileUrl = `/play/${encodeURIComponent(songObj.filename)}`;
-            audio.src = fileUrl;
-            
-            document.getElementById('np-title').innerText = songObj.title;
-            document.getElementById('np-artist').innerText = songObj.artist;
-            document.getElementById('rp-title').innerText = songObj.title;
-            document.getElementById('rp-artist').innerText = songObj.artist;
-            
-            let coverUrl = getCoverUrl(songObj);
-            document.getElementById('np-cover').src = coverUrl;
-            document.getElementById('rp-cover').src = coverUrl;
-            document.getElementById('rp-cover-glow').style.backgroundImage = `url("${coverUrl}")`;
-            
-            document.getElementById('download-btn').href = `/download/${encodeURIComponent(songObj.filename)}`;
-            document.getElementById('download-btn').style.display = 'inline-block';
-            
-            updateMediaSession(songObj, coverUrl);
-            fetchStatusAndLog(songObj.filename);
-            
-            audio.play();
-            renderQueue();
-            
-            document.getElementById('rp-video-container').style.opacity = '0';
-            fetch(`/api/video?artist=${encodeURIComponent(songObj.artist)}&song=${encodeURIComponent(songObj.title)}`)
-                .then(res => res.json())
-                .then(data => {
-                    if(data.youtube_id && ytPlayerReady) {
-                        if(!ytPlayer) {
-                            ytPlayer = new YT.Player('rp-video', {
-                                videoId: data.youtube_id,
-                                playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0, 'modestbranding': 1, 'rel': 0, 'showinfo': 0, 'mute': 1 },
-                                events: {
-                                    'onReady': (e) => { e.target.playVideo(); document.getElementById('rp-video-container').style.opacity = '1'; }
-                                }
-                            });
-                        } else {
-                            ytPlayer.loadVideoById(data.youtube_id);
-                            document.getElementById('rp-video-container').style.opacity = '1';
-                        }
-                    } else if (ytPlayer) {
-                        ytPlayer.stopVideo();
-                        document.getElementById('rp-video-container').style.opacity = '0';
-                    }
-                });
-
-            lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;"><i class="fas fa-spinner fa-spin"></i> Searching for lyrics...</div>';
-            syncedLyrics = [];
-            activeLyricIndex = -1;
-            
-            let query = `${songObj.artist} ${songObj.title}`.toLowerCase();
-            let cleanQuery = query.replace(/\s*\(feat\..*?\)/g, '').replace(/\s*ft\..*$/g, '').replace(/[^a-z0-9 ]/g, '');
-            
-            fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(cleanQuery)}`)
-                .then(r => r.json())
-                .then(results => {
-                    if (results && results.length > 0) {
-                        let bestMatch = results.find(r => r.syncedLyrics);
-                        if (bestMatch && bestMatch.syncedLyrics) {
-                            let parsed = parseLrc(bestMatch.syncedLyrics);
-                            syncedLyrics = parsed;
-                            renderLyrics(parsed);
-                        } else if (bestMatch && bestMatch.plainLyrics) {
-                            renderPlainLyrics(bestMatch.plainLyrics);
-                        } else {
-                            lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">No lyrics found for this track.</div>';
-                        }
-                    } else {
-                        lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">No lyrics found for this track.</div>';
-                    }
-                }).catch(() => {
-                    lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">Failed to load lyrics.</div>';
-                });
-        }
-
-        function parseLrc(lrcString) {
-            const lines = lrcString.split('\\n');
-            const parsed = [];
-            const timeRegex = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
-            
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                const match = timeRegex.exec(line);
-                if (match) {
-                    const minutes = parseInt(match[1], 10);
-                    const seconds = parseInt(match[2], 10);
-                    const milliseconds = parseInt(match[3].padEnd(3, '0'), 10);
-                    const timeInSeconds = (minutes * 60) + seconds + (milliseconds / 1000);
-                    
-                    const text = line.replace(timeRegex, '').trim();
-                    if(text) {
-                        const words = text.split(' ');
-                        const wordTimings = [];
-                        let accum = 0;
-                        for(let w=0; w<words.length; w++) {
-                            const chunk = 1 / words.length;
-                            wordTimings.push({ word: words[w], startPercent: accum, endPercent: accum + chunk });
-                            accum += chunk;
-                        }
-                        
-                        parsed.push({ time: timeInSeconds, text: text, words: words, wordTimings: wordTimings, duration: 3.0 });
-                    }
-                }
-            }
-            
-            for(let i=0; i<parsed.length - 1; i++) {
-                parsed[i].duration = parsed[i+1].time - parsed[i].time;
-                if(parsed[i].duration <= 0 || parsed[i].duration > 10) parsed[i].duration = 3.0;
-            }
-            
-            return parsed;
-        }
-
-        function renderLyrics(parsedLines) {
-            let html = '<div style="height: 50%;"></div>';
-            parsedLines.forEach((line, index) => {
-                let wordsHtml = line.wordTimings.map(wt => `<span class="lyric-word">${wt.word}</span>`).join(' ');
-                html += `<div class="lyric-line" id="lyric-${index}" onclick="seekTo(${line.time})">${wordsHtml}</div>`;
-            });
-            html += '<div style="height: 50%;"></div>';
-            lyricsContainer.innerHTML = html;
-        }
-
-        function renderPlainLyrics(text) {
-            let html = '<div style="height: 20px;"></div>';
-            text.split('\\n').forEach(line => {
-                if(line.trim()) html += `<div class="lyric-line" style="cursor:default;">${line.replace(/</g, '&lt;')}</div>`;
-                else html += `<br>`;
-            });
-            html += '<div style="height: 50px;"></div>';
-            lyricsContainer.innerHTML = html;
-        }
-
-        function seekTo(timeSeconds) {
-            if(!audio.duration) return;
-            audio.currentTime = timeSeconds;
-            if(ytPlayer && typeof ytPlayer.seekTo === 'function') ytPlayer.seekTo(timeSeconds, true);
-        }
-
-        function nextTrack() {
-            if (isRadioMode) {
-                if (currentSongObj) radioHistory.push(currentSongObj.filename);
-                if (radioHistory.length > 20) radioHistory.shift();
-                
-                let histParam = radioHistory.map(encodeURIComponent).join(',');
-                fetch('/api/radio/next?history=' + histParam)
-                    .then(res => res.json())
-                    .then(data => { if(data.song) loadTrack(data.song); });
-            } else {
-                if (currentQueue.length === 0) return;
-                currentIndex++;
-                if (currentIndex >= currentQueue.length) {
-                    currentIndex = 0;
-                    if (!isRepeat) {
-                        audio.pause();
-                        renderQueue();
-                        return;
-                    }
-                }
-                loadTrack(currentQueue[currentIndex]);
-            }
-        }
-
-        function prevTrack() {
-            if (audio.currentTime > 3) {
-                audio.currentTime = 0;
-                if(ytPlayer && typeof ytPlayer.seekTo === 'function') ytPlayer.seekTo(0, true);
-            } else if (!isRadioMode && currentQueue.length > 0) {
-                currentIndex--;
-                if (currentIndex < 0) currentIndex = currentQueue.length - 1;
-                loadTrack(currentQueue[currentIndex]);
-            }
-        }
-
         function buildCardsHTML(songsArray, isRow = false, playlistToken = null) {
             let html = isRow ? `<div class="scroll-row">` : `<div class="grid">`;
             let filenameArr = JSON.stringify(songsArray.map(s => s.filename)).replace(/"/g, '&quot;');
@@ -1389,7 +1203,7 @@ HTML_TEMPLATE = """
         }
 
         function renderGrid(songsArray, title) {
-            contentDiv.innerHTML = `<div class="fade-in"><h2>${title}</h2>` + buildCardsHTML(songsArray) + `</div>`;
+            contentDiv.innerHTML = `<div class="fade-in"><h2 style="margin-bottom:24px;">${title}</h2>` + buildCardsHTML(songsArray) + `</div>`;
         }
 
         function renderHome() {
@@ -1397,28 +1211,70 @@ HTML_TEMPLATE = """
                 let statA = songStats[a.filename] || {likes:0, plays:0};
                 let statB = songStats[b.filename] || {likes:0, plays:0};
                 return (statB.likes * 5 + statB.plays) - (statA.likes * 5 + statA.plays);
-            }).slice(0, 15);
+            }).slice(0, 12);
 
-            let newlyAdded = [...allSongs].sort((a, b) => b.mtime - a.mtime).slice(0, 15);
+            let newlyAdded = [...allSongs].sort((a, b) => b.mtime - a.mtime).slice(0, 12);
+            
+            let topArtistsHtml = `<div class="scroll-row">`;
+            let artistNames = Object.keys(groupedArtists).slice(0, 12);
+            artistNames.forEach(artist => {
+                let sampleSong = groupedArtists[artist][0];
+                let coverUrl = getCoverUrl(sampleSong);
+                let escapedArtist = artist.replace(/'/g, "\\\\'").replace(/"/g, '&quot;');
+                topArtistsHtml += `
+                <div class="card" onclick="renderGrid(groupedArtists['${escapedArtist}'], '${escapedArtist}')" style="text-align:center; min-width: 160px; padding: 20px;">
+                    <div class="card-img-container" style="border-radius: 50%; height: 120px; width: 120px; margin: 0 auto 16px auto; box-shadow: 0 10px 20px rgba(0,0,0,0.5);">
+                        <img src="${coverUrl}" loading="lazy" style="border-radius: 50%;">
+                        <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
+                    </div>
+                    <div class="card-title" style="font-size: 15px; margin-bottom: 4px;">${artist}</div>
+                    <div style="font-size:12px; color:var(--subtext); font-weight: 500;">${groupedArtists[artist].length} tracks</div>
+                </div>`;
+            });
+            topArtistsHtml += `</div>`;
 
             contentDiv.innerHTML = `
                 <div class="fade-in">
-                    <h2>🔥 Popular Right Now</h2>
+                    <h2 style="margin-bottom: 20px;"><i class="fas fa-fire" style="color:#ff5555; margin-right:12px;"></i>Trending Now</h2>
                     ${buildCardsHTML(popular, true)}
-                    <h2>✨ Newly Added</h2>
+
+                    <h2 style="margin-bottom: 20px; margin-top: 10px;"><i class="fas fa-star" style="color:#ffcc00; margin-right:12px;"></i>Recently Added</h2>
                     ${buildCardsHTML(newlyAdded, true)}
-                    <h2>All Songs</h2>
+                    
+                    <h2 style="margin-bottom: 20px; margin-top: 10px;"><i class="fas fa-users" style="color:var(--accent); margin-right:12px;"></i>Featured Artists</h2>
+                    ${topArtistsHtml}
+
+                    <div style="text-align: center; margin-top: 40px; margin-bottom: 50px; background: rgba(255,255,255,0.02); padding: 50px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 10px 30px rgba(0,0,0,0.2);">
+                        <i class="fas fa-compact-disc" style="font-size: 48px; color: var(--accent); margin-bottom: 24px; opacity: 0.8; filter: drop-shadow(0 0 15px rgba(29, 185, 84, 0.4));"></i>
+                        <h2 style="margin-bottom: 12px; font-size: 32px;">Your Full Library</h2>
+                        <p style="color: var(--subtext); font-size: 16px; margin-bottom: 30px; font-weight: 500;">Explore all ${allSongs.length} tracks in your collection.</p>
+                        <button class="action-btn" style="background:var(--accent); color:black; padding: 16px 40px; font-size: 16px; font-weight: 800; border-radius: 30px; box-shadow: 0 10px 25px rgba(29, 185, 84, 0.4);" onclick="renderAllSongs()">
+                            Browse All Songs
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderAllSongs() {
+            document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
+            contentDiv.innerHTML = `
+                <div class="fade-in">
+                    <div style="display:flex; align-items:center; gap: 20px; margin-bottom: 30px;">
+                        <button class="action-btn" style="background:rgba(255,255,255,0.1); padding:12px 18px; border-radius:50%; box-shadow: none;" onclick="switchView('home')"><i class="fas fa-arrow-left"></i></button>
+                        <h2 style="margin:0; font-size: 36px;">All Songs</h2>
+                    </div>
                     ${buildCardsHTML(allSongs)}
                 </div>
             `;
         }
 
         function renderArtists() {
-            let html = `<div class="fade-in"><h2>Artists</h2><div class="grid">`;
+            let html = `<div class="fade-in"><h2 style="margin-bottom:24px;">Artists</h2><div class="grid">`;
             Object.keys(groupedArtists).forEach(artist => {
                 let sampleSong = groupedArtists[artist][0];
                 let coverUrl = getCoverUrl(sampleSong);
-                let escapedArtist = artist.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                let escapedArtist = artist.replace(/'/g, "\\\\'").replace(/"/g, '&quot;');
 
                 html += `
                 <div class="card" onclick="renderGrid(groupedArtists['${escapedArtist}'], '${escapedArtist}')" style="text-align:center;">
