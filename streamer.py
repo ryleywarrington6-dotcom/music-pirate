@@ -1,5 +1,6 @@
 import os
 import sys
+import io
 import json
 import random
 import re
@@ -10,7 +11,7 @@ import urllib.request
 import urllib.parse
 import atexit
 import shutil
-from flask import Flask, request, session, redirect, url_for, render_template_string, jsonify, send_from_directory, Response
+from flask import Flask, request, session, redirect, url_for, render_template_string, jsonify, send_from_directory, Response, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 
 try:
@@ -26,7 +27,7 @@ except ImportError:
 PORT = int(os.environ.get("PORT", 8000))
 MUSIC_DIR = os.environ.get("MUSIC_DIR", "./Music")
 
-# --- VERCEL SERVERLESS FIX ---
+# --- VERCEL SERVERLESS CONFIGURATION ---
 IS_VERCEL = os.environ.get("VERCEL") == "1"
 
 if IS_VERCEL:
@@ -108,6 +109,20 @@ def has_embedded_art(filepath):
                 if key.startswith('APIC'): return True
         if hasattr(audio, 'pictures') and audio.pictures: return True
     except Exception: pass
+    
+    # Check for local folder cover art
+    song_dir = os.path.dirname(filepath)
+    song_clean = os.path.splitext(os.path.basename(filepath))[0].lower()
+    valid_exts = ('.jpg', '.jpeg', '.png', '.webp')
+    if os.path.exists(song_dir):
+        try:
+            for f in os.listdir(song_dir):
+                f_lower = f.lower()
+                if f_lower.endswith(valid_exts):
+                    f_base = os.path.splitext(f_lower)[0]
+                    if f_base in ['cover', 'folder', 'front', song_clean]:
+                        return True
+        except: pass
     return False
 
 def parse_folder_and_filename(rel_path):
@@ -263,11 +278,12 @@ def search_youtube_video(artist, song):
     cache_key = f"{artist} | {song}"
     if cache_key in video_cache: return video_cache[cache_key]
 
+    # Searching for "audio" or "topic" ensures a 1:1 sync with the MP3 (no music video intros)
     queries = [
-        f"{artist} {song} official music video",
-        f"{artist} {song}",
-        f"{artist} - {song}",
-        f"{artist} topic {song}"
+        f"{artist} {song} audio",
+        f"{artist} - {song} (Official Audio)",
+        f"{artist} {song} topic",
+        f"{artist} {song} lyric video"
     ]
 
     for query in queries:
@@ -281,18 +297,6 @@ def search_youtube_video(artist, song):
                 html = resp.read().decode('utf-8')
                 matches = re.findall(r'"videoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})"', html)
                 if matches:
-                    vid = matches[0]
-                    video_cache[cache_key] = vid
-                    save_json_file(VIDEO_CACHE_FILE, video_cache)
-                    return vid
-
-                matches = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
-                if len(matches) > 2:
-                    vid = matches[2]
-                    video_cache[cache_key] = vid
-                    save_json_file(VIDEO_CACHE_FILE, video_cache)
-                    return vid
-                elif matches:
                     vid = matches[0]
                     video_cache[cache_key] = vid
                     save_json_file(VIDEO_CACHE_FILE, video_cache)
@@ -330,7 +334,6 @@ HTML_TEMPLATE = """
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .fade-in { animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         
-        /* Right Panel Layout */
         .right-panel { width: 340px; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; padding: 24px; display: none; flex-direction: column; text-align: center; overflow: hidden; transition: 0.3s; flex-shrink: 0; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
         .rp-header-row { display: flex; justify-content: space-between; width: 100%; align-items: center; margin-bottom: 16px;}
         .rp-tabs { display: flex; gap: 8px; background: #1a1a1a; padding: 4px; border-radius: 20px; }
@@ -345,8 +348,7 @@ HTML_TEMPLATE = """
 
         #visualizer { width: 100%; height: 50px; display: block; filter: drop-shadow(0px 0px 8px rgba(29, 185, 84, 0.5)); margin-top: 5px; }
 
-        /* Queue Tab */
-        .queue-container { flex: 1; overflow-y: auto; text-align: left; padding-top: 10px; display: none; }
+        .queue-container { flex: 1; overflow-y: auto; text-align: left; padding-top: 10px; display: none; width: 100%; }
         .queue-item { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 6px; cursor: pointer; transition: 0.2s; margin-bottom: 4px; }
         .queue-item:hover { background: #282828; }
         .queue-item img { width: 40px; height: 40px; border-radius: 4px; object-fit: cover; }
@@ -424,7 +426,6 @@ HTML_TEMPLATE = """
         .playlist-select-item { padding: 12px 16px; background: #222; border-radius: 6px; margin-bottom: 8px; cursor: pointer; font-weight: 600; text-align: left; display: flex; justify-content: space-between; align-items: center; transition: 0.2s; }
         .playlist-select-item:hover { background: #2a2a2a; border-color: var(--accent); color: var(--accent); }
         
-        /* Social / Chat Styles */
         .social-container { display: flex; height: calc(100vh - 120px); gap: 20px; }
         .social-sidebar { width: 300px; background: #181818; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #282828; }
         .social-sidebar-header { padding: 16px; border-bottom: 1px solid #282828; }
@@ -547,7 +548,6 @@ HTML_TEMPLATE = """
             </div>
         </div>
         
-        <!-- Video Context -->
         <div id="rp-view-video" style="display:block;">
             <div class="rp-media-container">
                 <div class="rp-cover-glow" id="rp-cover-glow"></div>
@@ -561,12 +561,10 @@ HTML_TEMPLATE = """
             <canvas id="visualizer" width="600" height="100"></canvas>
         </div>
 
-        <!-- Lyrics Context -->
         <div class="lyrics-container" id="rp-view-lyrics" style="display:none;">
             <div style="color:#555; text-align:center; padding-top:40px;">Select a track to load live lyrics.</div>
         </div>
 
-        <!-- Queue Context -->
         <div class="queue-container" id="rp-view-queue">
             <div style="color:#555; text-align:center; padding-top:40px;">Queue is empty.</div>
         </div>
@@ -601,9 +599,9 @@ HTML_TEMPLATE = """
         </div>
         
         <div class="volume-controls">
-            <a id="download-btn" href="#" download style="color:var(--subtext); margin-right:15px; display:none;" title="Download Track"><i class="fas fa-download"></i></a>
-            <button class="btn" id="dislike-btn" onclick="sendFeedback('dislike')"><i class="fas fa-thumbs-down"></i></button>
-            <button class="btn" id="like-btn" onclick="sendFeedback('like')" style="margin-right:10px;"><i class="fas fa-heart"></i></button>
+            <a id="download-btn" href="#" download style="color:var(--subtext); margin-right:15px; display:none; font-size: 14px;" title="Download Track"><i class="fas fa-download"></i></a>
+            <button class="btn" id="dislike-btn" onclick="sendFeedback('dislike')" title="Dislike"><i class="fas fa-thumbs-down"></i></button>
+            <button class="btn" id="like-btn" onclick="sendFeedback('like')" style="margin-right:10px;" title="Like"><i class="fas fa-heart"></i></button>
             
             <i class="fas fa-wave-square" title="Bass Boost" style="cursor:pointer; width:16px;"></i>
             <input type="range" id="bass-bar" value="0" max="20" style="width: 60px; margin-right: 10px;" title="Bass Boost">
@@ -903,13 +901,15 @@ HTML_TEMPLATE = """
             updateSliderFill(progressBar);
             timeCurrentEl.innerText = formatTime(audio.currentTime);
 
+            // Sync Youtube Video
             if (ytPlayer && typeof ytPlayer.getCurrentTime === 'function' && typeof ytPlayer.getPlayerState === 'function' && ytPlayer.getPlayerState() === YT.PlayerState.PLAYING) {
                 let ytTime = ytPlayer.getCurrentTime();
-                if (Math.abs(ytTime - audio.currentTime) > 1.5) {
+                if (Math.abs(ytTime - audio.currentTime) > 2.0) {
                     ytPlayer.seekTo(audio.currentTime, true);
                 }
             }
 
+            // Sync Lyrics
             if (syncedLyrics.length > 0) {
                 let newIndex = syncedLyrics.findIndex(l => l.time > audio.currentTime) - 1;
                 if (newIndex < 0) newIndex = 0;
@@ -1350,7 +1350,7 @@ HTML_TEMPLATE = """
                             let songMeta = allSongs.find(s => s.filename === f.now_playing.song);
                             if(songMeta) {
                                 let cleanFilename = songMeta.filename.replace(/'/g, "\\'");
-                                let listenAlongBtn = `<button class="action-btn" style="padding:4px 8px; font-size:10px; margin-top:4px;" onclick="event.stopPropagation(); playSongByFilename('${cleanFilename}')"><i class="fas fa-headphones"></i> Listen Along</button>`;
+                                let listenAlongBtn = `<button class="action-btn" style="padding:4px 8px; font-size:10px; margin-top:4px; background:var(--accent); color:black;" onclick="event.stopPropagation(); playSongByFilename('${cleanFilename}')"><i class="fas fa-headphones"></i> Listen Along</button>`;
                                 npText = `<div style="font-size:11px; color:var(--accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; width: 150px; margin-top: 2px;"><i class="fas fa-play" style="font-size:8px;"></i> ${songMeta.title.replace(/</g, '&lt;')}</div>${listenAlongBtn}`;
                             }
                         }
@@ -2132,14 +2132,31 @@ def api_cover():
                     for key in audio.tags.keys():
                         if key.startswith('APIC'):
                             pic = audio.tags[key]
-                            return Response(pic.data, mimetype=pic.mime)
+                            mime = getattr(pic, 'mime', 'image/jpeg')
+                            return send_file(io.BytesIO(pic.data), mimetype=mime)
                 if hasattr(audio, 'pictures') and audio.pictures:
                     pic = audio.pictures[0]
                     img_data = getattr(pic, 'data', None) or getattr(pic, 'pic_data', None)
                     if img_data:
-                        return Response(img_data, mimetype=pic.mime)
+                        mime = getattr(pic, 'mime', 'image/jpeg')
+                        return send_file(io.BytesIO(img_data), mimetype=mime)
         except Exception:
             pass
+            
+        # Try local folder images
+        song_dir = os.path.dirname(filepath)
+        song_clean = os.path.splitext(os.path.basename(filename))[0].lower()
+        valid_exts = ('.jpg', '.jpeg', '.png', '.webp')
+        if os.path.exists(song_dir):
+            try:
+                for f in os.listdir(song_dir):
+                    f_lower = f.lower()
+                    if f_lower.endswith(valid_exts):
+                        f_base = os.path.splitext(f_lower)[0]
+                        if f_base in ['cover', 'folder', 'front', song_clean]:
+                            return send_from_directory(song_dir, f)
+            except Exception:
+                pass
 
     meta = get_song_metadata(filename) if filename else {"artist": "Unknown", "title": "Music"}
     svg = generate_placeholder_cover(meta['artist'], meta['title'])
