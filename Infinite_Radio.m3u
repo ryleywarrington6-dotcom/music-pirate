@@ -1,5 +1,0 @@
-#EXTM3U
-#PLAYLIST:Infinite Radio
-#EXT-X-JUKEBOX:true
-
-(loved = 1 OR play_count > 3) AND skip_count = 0 ORDER BY RANDOM()
