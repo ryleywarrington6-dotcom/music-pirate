@@ -23,21 +23,24 @@ except ImportError:
     print("    python -m pip install mutagen\n")
     sys.exit(1)
 
-PORT = int(os.environ.get("PORT", 8000))
+PORT = int(os.environ.get("PORT", 10000))
 
-# --- STRICT GITHUB DIRECTORY PATHING ---
-# Forces the app to read strictly from the ./Music folder in your repository
-MUSIC_DIR = os.path.abspath(os.environ.get("MUSIC_DIR", "./Music"))
+# Absolute path to the repository directory
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+
+# Music directory sitting inside your Git repository
+MUSIC_DIR = os.path.abspath(os.environ.get("MUSIC_DIR", os.path.join(BASE_DIR, "Music")))
 os.makedirs(MUSIC_DIR, exist_ok=True)
 
-# DATA_DIR points to persistent Railway Volume for databases
-DATA_DIR = os.environ.get("DATA_DIR", ".")
+# DATA_DIR points to Render's persistent disk path if mounted (e.g. /var/data)
+DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
 CACHE_DIR = os.path.join(DATA_DIR, "Cache_Art")
 PROFILES_DIR = os.path.join(DATA_DIR, "Profiles")
 DB_FILE = os.path.join(DATA_DIR, 'database.json')
-METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v9.json')
+METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v11.json')
 VIDEO_CACHE_FILE = os.path.join(DATA_DIR, 'videos_v2.json')
 
+os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(PROFILES_DIR, exist_ok=True)
 
@@ -78,7 +81,7 @@ def _save_meta_cache():
 atexit.register(_save_meta_cache)
 
 def get_all_filepaths():
-    """Scans the Github ./Music folder for any audio files inside artist subfolders"""
+    """Scans the ./Music folder for any audio files inside artist subfolders."""
     audio_files = []
     if os.path.exists(MUSIC_DIR):
         for root, dirs, files in os.walk(MUSIC_DIR):
@@ -95,7 +98,7 @@ def has_embedded_art(filepath):
         if audio is None: return False
         if hasattr(audio, 'tags') and audio.tags:
             for key in audio.tags.keys():
-                if key.startswith('APIC'): return True
+                if key.startswith('APIC') or key.startswith('COVR'): return True
         if hasattr(audio, 'pictures') and audio.pictures: return True
     except Exception: pass
     
@@ -1763,12 +1766,33 @@ def logout():
 @app.route('/play/<path:filename>')
 def play(filename):
     if 'user' not in session: return "Unauthorized", 401
-    return send_from_directory(MUSIC_DIR, filename)
+    
+    # Decodes URL encoded subpaths safely
+    clean_filename = urllib.parse.unquote(filename).lstrip('/')
+    filepath = os.path.normpath(os.path.join(MUSIC_DIR, clean_filename))
+    
+    if not os.path.exists(filepath):
+        return "Audio file not found", 404
+        
+    directory = os.path.dirname(filepath)
+    file_basename = os.path.basename(filepath)
+    
+    # Serving directly from absolute directory path fixes subfolder issues
+    return send_from_directory(directory, file_basename)
 
 @app.route('/download/<path:filename>')
 def download(filename):
     if 'user' not in session: return "Unauthorized", 401
-    return send_from_directory(MUSIC_DIR, filename, as_attachment=True)
+    
+    clean_filename = urllib.parse.unquote(filename).lstrip('/')
+    filepath = os.path.normpath(os.path.join(MUSIC_DIR, clean_filename))
+    
+    if not os.path.exists(filepath):
+        return "Audio file not found", 404
+        
+    directory = os.path.dirname(filepath)
+    file_basename = os.path.basename(filepath)
+    return send_from_directory(directory, file_basename, as_attachment=True)
 
 @app.route('/api/data')
 def api_data():
@@ -1856,7 +1880,12 @@ def public_playlist_view(token):
     if token not in playlists: return "Playlist not found", 404
 
     pl = playlists[token]
-    songs = [get_song_metadata(f) for f in pl['songs'] if os.path.exists(os.path.join(MUSIC_DIR, f))]
+    songs = []
+    for f in pl['songs']:
+        clean_f = urllib.parse.unquote(f).lstrip('/')
+        if os.path.exists(os.path.join(MUSIC_DIR, clean_f)):
+            songs.append(get_song_metadata(clean_f))
+            
     return render_template_string(PUBLIC_PLAYLIST_TEMPLATE, playlist=pl, songs=songs)
 
 # --- SOCIAL & MESSAGING API ROUTES ---
@@ -2130,7 +2159,8 @@ def admin_users_api():
 @app.route('/api/cover')
 def api_cover():
     filename = request.args.get('file', '')
-    filepath = os.path.join(MUSIC_DIR, filename)
+    clean_filename = urllib.parse.unquote(filename).lstrip('/')
+    filepath = os.path.normpath(os.path.join(MUSIC_DIR, clean_filename))
 
     if os.path.exists(filepath):
         try:
@@ -2152,7 +2182,7 @@ def api_cover():
             pass
             
         song_dir = os.path.dirname(filepath)
-        song_clean = os.path.splitext(os.path.basename(filename))[0].lower()
+        song_clean = os.path.splitext(os.path.basename(clean_filename))[0].lower()
         valid_exts = ('.jpg', '.jpeg', '.png', '.webp')
         if os.path.exists(song_dir):
             try:
@@ -2165,7 +2195,7 @@ def api_cover():
             except Exception:
                 pass
 
-    meta = get_song_metadata(filename) if filename else {"artist": "Unknown", "title": "Music"}
+    meta = get_song_metadata(clean_filename) if clean_filename else {"artist": "Unknown", "title": "Music"}
     svg = generate_placeholder_cover(meta['artist'], meta['title'])
     return Response(svg, mimetype='image/svg+xml')
 
