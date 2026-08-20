@@ -244,6 +244,7 @@ HTML_TEMPLATE = """
         /* Animations */
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .fade-in { animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        @keyframes eq { 0% { height: 4px; } 100% { height: 16px; } }
         
         /* Right Sidebar Panel */
         .right-panel { width: 340px; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; padding: 24px; display: none; flex-direction: column; align-items: center; text-align: center; overflow: hidden; transition: 0.3s; flex-shrink: 0; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
@@ -253,6 +254,9 @@ HTML_TEMPLATE = """
         .rp-cover-glow { position: absolute; top: 10%; left: 10%; width: 80%; height: 80%; filter: blur(35px); opacity: 0.65; z-index: 1; transition: background-image 0.5s ease; background-size: cover; background-position: center; border-radius: 50%; }
         #rp-cover { position: relative; z-index: 2; width: 100%; height: 100%; border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.7); object-fit: cover; }
         
+        /* High-Res Visualizer Canvas */
+        #visualizer { width: 100%; height: 50px; display: block; filter: drop-shadow(0px 0px 8px rgba(29, 185, 84, 0.5)); margin-top: 5px; }
+
         /* Player Bar */
         .player-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 88px; background: #000; border-top: 1px solid #222; display: flex; align-items: center; padding: 0 24px; justify-content: space-between; z-index: 1000; }
         
@@ -375,10 +379,8 @@ HTML_TEMPLATE = """
         <div class="nav-item" onclick="switchView('artists')"><i class="fas fa-microphone"></i> Artists</div>
         <div class="nav-item" onclick="switchView('radio')"><i class="fas fa-broadcast-tower"></i> Infinite Radio</div>
         
-        {% if is_admin %}
-        <div class="nav-section-title" style="margin-top: 16px;">Administration</div>
-        <div class="nav-item" onclick="switchView('admin')"><i class="fas fa-users-cog"></i> Account Manager</div>
-        {% endif %}
+        <div class="nav-section-title" style="margin-top: 16px;">General</div>
+        <div class="nav-item" onclick="switchView('settings')"><i class="fas fa-cog"></i> Settings</div>
     </div>
 
     <div class="center-wrapper">
@@ -388,7 +390,6 @@ HTML_TEMPLATE = """
                 <input type="text" id="global-search" placeholder="Search songs or artists..." oninput="handleSearch(this.value)">
             </div>
             
-            <!-- TOP RIGHT SETTINGS DROPDOWN -->
             <div class="user-badge-wrapper">
                 <div class="user-badge" onclick="toggleSettingsMenu()">
                     <i class="fas fa-user-circle" style="color: var(--accent); font-size:18px;"></i> 
@@ -396,16 +397,12 @@ HTML_TEMPLATE = """
                     <i class="fas fa-caret-down" style="font-size: 11px;"></i>
                 </div>
                 <div class="settings-dropdown" id="settings-dropdown">
-                    <div class="dropdown-item" onclick="openSettingsModal()"><i class="fas fa-sliders-h"></i> Settings</div>
-                    {% if is_admin %}
-                    <div class="dropdown-item" onclick="switchView('admin'); toggleSettingsMenu();"><i class="fas fa-users-cog"></i> Account Manager</div>
-                    {% endif %}
+                    <div class="dropdown-item" onclick="switchView('settings'); toggleSettingsMenu();"><i class="fas fa-sliders-h"></i> Settings</div>
                     <div class="dropdown-divider"></div>
                     <a href="/logout" class="dropdown-item" style="color: #ff5555;"><i class="fas fa-sign-out-alt"></i> Log Out</a>
                 </div>
             </div>
         </div>
-        <!-- Wrap content in fade-in container for animations -->
         <div class="main-content" id="main-content"></div>
     </div>
 
@@ -413,6 +410,11 @@ HTML_TEMPLATE = """
     <div class="right-panel" id="right-panel">
         <div style="display:flex; justify-content:space-between; width:100%; align-items:center;">
             <h3 style="margin:0; color: var(--subtext); font-size: 12px; letter-spacing: 1px;"><i class="fas fa-compact-disc"></i> NOW PLAYING</h3>
+            <div class="eq-container paused" id="eq-anim">
+                <div class="eq-bar"></div>
+                <div class="eq-bar"></div>
+                <div class="eq-bar"></div>
+            </div>
         </div>
         
         <div class="rp-cover-wrapper">
@@ -423,8 +425,7 @@ HTML_TEMPLATE = """
         <div id="rp-title" style="font-size: 20px; font-weight: 700; margin-bottom: 4px; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></div>
         <div id="rp-artist" style="color: var(--subtext); font-weight: 500; font-size: 14px; margin-bottom: 10px; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></div>
 
-        <!-- NEW LIVE CANVAS VISUALIZER -->
-        <canvas id="visualizer" width="300" height="60" style="width: 100%; height: 60px; display: block; border-radius: 4px;"></canvas>
+        <canvas id="visualizer" width="600" height="100"></canvas>
 
         <div class="lyrics-container" id="lyrics-container">
             <div style="color:#555; text-align:center; padding-top:40px;">Select a track to load live lyrics.</div>
@@ -468,6 +469,8 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        const currentUserIsAdmin = {{ 'true' if is_admin else 'false' }};
+        
         let allSongs = [];
         let songStats = {};
         let groupedArtists = {};
@@ -481,7 +484,6 @@ HTML_TEMPLATE = """
         let syncedLyrics = [];
         let activeLyricIndex = -1;
 
-        // Web Audio API Variables
         let audioCtx;
         let analyser;
         let source;
@@ -493,6 +495,7 @@ HTML_TEMPLATE = """
         const rightPanel = document.getElementById('right-panel');
         const audio = document.getElementById('audio-player');
         const playIcon = document.getElementById('play-icon');
+        const eqAnim = document.getElementById('eq-anim');
         const progressBar = document.getElementById('progress-bar');
         const volumeBar = document.getElementById('volume-bar');
         const muteIcon = document.getElementById('mute-icon');
@@ -500,7 +503,6 @@ HTML_TEMPLATE = """
         const timeTotalEl = document.getElementById('time-total');
         const lyricsContainer = document.getElementById('lyrics-container');
 
-        // Initialize Web Audio API Visualizer Engine
         function initVisualizer() {
             if (visualizerInitialized) return;
             visualizerInitialized = true;
@@ -509,91 +511,73 @@ HTML_TEMPLATE = """
             audioCtx = new AudioContext();
             analyser = audioCtx.createAnalyser();
             
+            analyser.fftSize = 256; 
+            analyser.smoothingTimeConstant = 0.85; 
+            
             source = audioCtx.createMediaElementSource(audio);
             source.connect(analyser);
             analyser.connect(audioCtx.destination);
             
-            analyser.fftSize = 128; 
             const bufferLength = analyser.frequencyBinCount;
             const dataArray = new Uint8Array(bufferLength);
             
             function draw() {
                 requestAnimationFrame(draw);
-                analyser.getByteFrequencyData(dataArray);
+                
+                if (!audio.paused) {
+                    analyser.getByteFrequencyData(dataArray);
+                } else {
+                    for(let i=0; i<bufferLength; i++) {
+                        dataArray[i] = Math.max(0, dataArray[i] - 5);
+                    }
+                }
                 
                 canvasCtx.clearRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
                 
-                const barWidth = (visualizerCanvas.width / bufferLength) * 2.5;
-                let barHeight;
-                let x = 0;
+                const usableBins = Math.floor(bufferLength * 0.75); 
+                const barWidth = (visualizerCanvas.width / usableBins) / 2;
+                const gap = 2;
                 
-                for(let i = 0; i < bufferLength; i++) {
-                    barHeight = (dataArray[i] / 255) * visualizerCanvas.height;
+                let xRight = visualizerCanvas.width / 2;
+                let xLeft = visualizerCanvas.width / 2;
+                
+                for(let i = 0; i < usableBins; i++) {
+                    let rawValue = dataArray[i];
+                    let percent = rawValue / 255;
+                    let mathVal = Math.pow(percent, 1.5); 
+                    let barHeight = mathVal * visualizerCanvas.height;
                     
                     let gradient = canvasCtx.createLinearGradient(0, visualizerCanvas.height, 0, 0);
-                    gradient.addColorStop(0, "rgba(29, 185, 84, 0.2)");
+                    gradient.addColorStop(0, "rgba(29, 185, 84, 0.4)");
                     gradient.addColorStop(1, "rgba(29, 185, 84, 1)");
                     
                     canvasCtx.fillStyle = gradient;
-                    canvasCtx.fillRect(x, visualizerCanvas.height - barHeight, barWidth - 1, barHeight);
                     
-                    x += barWidth;
+                    canvasCtx.fillRect(xRight, visualizerCanvas.height - barHeight, barWidth - gap, barHeight);
+                    if (i > 0) {
+                        canvasCtx.fillRect(xLeft - barWidth, visualizerCanvas.height - barHeight, barWidth - gap, barHeight);
+                    }
+                    
+                    xRight += barWidth;
+                    xLeft -= barWidth;
                 }
             }
             draw();
         }
 
-        // Dynamic Slider Color Fill
         function updateSliderFill(el) {
             const val = (el.value - el.min) / (el.max - el.min) * 100;
             el.style.background = `linear-gradient(to right, var(--accent) ${val}%, #4d4d4d ${val}%)`;
         }
 
-        // Settings Dropdown
         function toggleSettingsMenu() {
             document.getElementById('settings-dropdown').classList.toggle('show');
         }
+        
         window.onclick = function(e) {
             if (!e.target.closest('.user-badge-wrapper')) {
                 document.querySelectorAll(".settings-dropdown").forEach(d => d.classList.remove('show'));
             }
-        }
-
-        function openSettingsModal() {
-            toggleSettingsMenu();
-            contentDiv.innerHTML = `
-                <div class="fade-in">
-                <h2>⚙️ User Settings</h2>
-                <div class="admin-card">
-                    <h3 style="margin-top:0; font-size:16px;">Change Password</h3>
-                    <form onsubmit="changePassword(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 350px;">
-                        <div>
-                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">Current Password</div>
-                            <input type="password" id="curr-pass" required style="margin:0;">
-                        </div>
-                        <div>
-                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">New Password</div>
-                            <input type="password" id="new-pass-user" required style="margin:0;">
-                        </div>
-                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700; margin-top:4px;">Update Password</button>
-                    </form>
-                </div>
-                </div>
-            `;
-        }
-
-        function changePassword(e) {
-            e.preventDefault();
-            let current_password = document.getElementById('curr-pass').value;
-            let new_password = document.getElementById('new-pass-user').value;
-            fetch('/api/settings/password', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({current_password, new_password})
-            }).then(res => res.json()).then(data => {
-                if(data.success) { alert("Password successfully updated!"); renderHome(); } 
-                else { alert(data.error || "Failed to update password"); }
-            });
         }
 
         function safeId(str) { return encodeURIComponent(str).replace(/[^a-zA-Z0-9]/g, ''); }
@@ -603,20 +587,22 @@ HTML_TEMPLATE = """
             return `/api/cover?artist=${encodeURIComponent(song.artist)}&song=${encodeURIComponent(song.title)}&file=${encodeURIComponent(song.filename)}`;
         }
 
-        // --- AUDIO CONTROLS ---
         audio.addEventListener('play', () => {
             initVisualizer();
-            if (audioCtx && audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
+            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+            
             playIcon.classList.remove('fa-play');
             playIcon.classList.add('fa-pause');
             playIcon.style.marginLeft = '0';
+            eqAnim.classList.remove('paused');
+            eqAnim.classList.add('playing');
         });
+        
         audio.addEventListener('pause', () => {
             playIcon.classList.remove('fa-pause');
             playIcon.classList.add('fa-play');
             playIcon.style.marginLeft = '2px';
+            eqAnim.classList.add('paused');
         });
 
         audio.addEventListener('loadedmetadata', () => {
@@ -630,13 +616,13 @@ HTML_TEMPLATE = """
             updateSliderFill(progressBar);
             timeCurrentEl.innerText = formatTime(audio.currentTime);
             
-            // Sync lyrics perfectly using offset height math
             if (syncedLyrics.length > 0) {
                 let newIndex = syncedLyrics.findIndex(l => l.time > audio.currentTime) - 1;
                 if (newIndex < 0) newIndex = 0;
                 if (newIndex === syncedLyrics.length - 2 && audio.currentTime >= syncedLyrics[syncedLyrics.length - 1].time) {
                     newIndex = syncedLyrics.length - 1;
                 }
+                
                 if (newIndex !== activeLyricIndex && newIndex >= 0) {
                     if (activeLyricIndex >= 0) {
                         const oldEl = document.getElementById(`lyric-${activeLyricIndex}`);
@@ -646,7 +632,6 @@ HTML_TEMPLATE = """
                     const newEl = document.getElementById(`lyric-${activeLyricIndex}`);
                     if (newEl) {
                         newEl.classList.add('active');
-                        // Fix for perfectly centering the lyrics element
                         const containerHalf = lyricsContainer.clientHeight / 2;
                         const lineHalf = newEl.clientHeight / 2;
                         lyricsContainer.scrollTo({
@@ -670,8 +655,6 @@ HTML_TEMPLATE = """
             else if (audio.volume < 0.5) { muteIcon.className = "fas fa-volume-down"; } 
             else { muteIcon.className = "fas fa-volume-up"; }
         });
-        
-        // Initialize volume fill
         updateSliderFill(volumeBar);
 
         function toggleMute() {
@@ -699,7 +682,6 @@ HTML_TEMPLATE = """
             document.getElementById('shuffle-btn').classList.toggle('active', isShuffle);
             if (isShuffle && currentQueue.length > 0) {
                 originalQueue = [...currentQueue];
-                // Shuffle remaining queue starting from after current index
                 let remaining = currentQueue.slice(currentIndex + 1);
                 for (let i = remaining.length - 1; i > 0; i--) {
                     const j = Math.floor(Math.random() * (i + 1));
@@ -758,7 +740,7 @@ HTML_TEMPLATE = """
             if (view === 'home') renderHome();
             if (view === 'artists') renderArtists();
             if (view === 'radio') startRadio();
-            if (view === 'admin') renderAdminPanel();
+            if (view === 'settings') renderSettings();
         }
 
         function handleSearch(query) {
@@ -842,26 +824,53 @@ HTML_TEMPLATE = """
             contentDiv.innerHTML = html;
         }
 
-        function renderAdminPanel() {
-            contentDiv.innerHTML = `
+        function renderSettings() {
+            let html = `
                 <div class="fade-in">
-                <h2><i class="fas fa-users-cog" style="color:var(--accent)"></i> Account Manager</h2>
+                <h2>⚙️ Settings</h2>
+                <div class="admin-card">
+                    <h3 style="margin-top:0; font-size:16px;">Change Your Password</h3>
+                    <form onsubmit="changePassword(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 350px;">
+                        <div>
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">Current Password</div>
+                            <input type="password" id="curr-pass" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
+                        </div>
+                        <div>
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">New Password</div>
+                            <input type="password" id="new-pass-user" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
+                        </div>
+                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700; margin-top:4px;">Update Password</button>
+                    </form>
+                </div>
+            `;
+            
+            if (currentUserIsAdmin) {
+                html += `
+                <h2 style="margin-top:40px;"><i class="fas fa-users-cog" style="color:var(--accent)"></i> User Management</h2>
                 <div class="admin-card">
                     <h3 style="margin-top:0; font-size:16px;">Create New Account</h3>
                     <form onsubmit="createUser(event)" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                        <input type="text" id="new-user" placeholder="Username" required style="margin:0; flex:1; min-width:160px;">
-                        <input type="password" id="new-pass" placeholder="Password" required style="margin:0; flex:1; min-width:160px;">
-                        <label style="font-size:13px; display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="new-admin"> Admin</label>
-                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px 18px; font-weight:700;">Add User</button>
+                        <input type="text" id="new-user" placeholder="Username" required style="margin:0; flex:1; min-width:160px; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white;">
+                        <input type="password" id="new-pass" placeholder="Password" required style="margin:0; flex:1; min-width:160px; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white;">
+                        
+                        <select id="new-role" style="padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; outline:none; cursor:pointer;">
+                            <option value="user">Standard User</option>
+                            <option value="admin">Administrator</option>
+                        </select>
+                        
+                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px 18px; font-weight:700;">Create Account</button>
                     </form>
                 </div>
                 <div class="admin-card" style="max-width:100%;">
                     <h3 style="margin-top:0; font-size:16px;">Existing Accounts</h3>
                     <div id="users-table-container">Loading users...</div>
                 </div>
-                </div>
-            `;
-            loadUsersTable();
+                `;
+            }
+            
+            html += `</div>`;
+            contentDiv.innerHTML = html;
+            if (currentUserIsAdmin) loadUsersTable();
         }
 
         function loadUsersTable() {
@@ -886,7 +895,7 @@ HTML_TEMPLATE = """
             e.preventDefault();
             let username = document.getElementById('new-user').value;
             let password = document.getElementById('new-pass').value;
-            let is_admin = document.getElementById('new-admin').checked;
+            let is_admin = document.getElementById('new-role').value === 'admin';
 
             fetch('/api/admin/users', {
                 method: 'POST',
@@ -896,7 +905,7 @@ HTML_TEMPLATE = """
                 if(data.success) {
                     document.getElementById('new-user').value = '';
                     document.getElementById('new-pass').value = '';
-                    document.getElementById('new-admin').checked = false;
+                    document.getElementById('new-role').value = 'user';
                     loadUsersTable();
                 } else { alert(data.error || "Failed to create user"); }
             });
@@ -916,7 +925,7 @@ HTML_TEMPLATE = """
             currentQueue = queue;
             originalQueue = [...queue];
             currentIndex = index;
-            if(isShuffle) toggleShuffle(); // re-shuffle new queue
+            if(isShuffle) toggleShuffle(); 
             loadSong(currentQueue[currentIndex]);
         }
 
@@ -948,7 +957,6 @@ HTML_TEMPLATE = """
             document.getElementById('rp-artist').innerText = songObj.artist;
             document.getElementById('rp-cover').src = coverUrl;
             
-            // Set Ambient Glow behind cover
             document.getElementById('rp-cover-glow').style.backgroundImage = `url('${coverUrl}')`;
             
             fetchStatusAndLog(songObj.filename);
@@ -1094,6 +1102,15 @@ HTML_TEMPLATE = """
 def index():
     db = load_db()
     users = db.get("users", {})
+    
+    # --- LEGACY DATABASE MIGRATION ---
+    if users:
+        has_admin = any(u.get("is_admin", False) for u in users.values())
+        if not has_admin:
+            first_user = list(users.keys())[0]
+            users[first_user]["is_admin"] = True
+            save_db(db)
+            
     if not users:
         if request.method == 'POST':
             username = request.form['username']
@@ -1113,7 +1130,12 @@ def index():
                 return redirect(url_for('index'))
         return render_template_string(HTML_TEMPLATE, logged_in=False, setup=False)
         
-    return render_template_string(HTML_TEMPLATE, logged_in=True, is_admin=session.get('is_admin', False))
+    # Auto-heal session in case of old cookies
+    current_user_data = users.get(session['user'], {})
+    is_admin = current_user_data.get('is_admin', False)
+    session['is_admin'] = is_admin
+        
+    return render_template_string(HTML_TEMPLATE, logged_in=True, is_admin=is_admin)
 
 @app.route('/logout')
 def logout():
