@@ -25,6 +25,12 @@ PORT = int(os.environ.get("PORT", 8000))
 MUSIC_DIR = os.environ.get("MUSIC_DIR", "./Music")
 os.makedirs(MUSIC_DIR, exist_ok=True)
 
+CACHE_DIR = "./Cache_Art"
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+PROFILES_DIR = os.environ.get("PROFILES_DIR", "./Profiles")
+os.makedirs(PROFILES_DIR, exist_ok=True)
+
 DB_FILE = 'database.json'
 METADATA_FILE = 'metadata_v7.json'
 VIDEO_CACHE_FILE = 'videos_v2.json'
@@ -74,7 +80,6 @@ def get_all_filepaths():
             if file.lower().endswith(('.mp3', '.flac', '.ogg', '.m4a', '.wav')):
                 full_path = os.path.join(root, file)
                 rel_path = os.path.relpath(full_path, MUSIC_DIR)
-                # Normalize separators for consistency
                 rel_path = rel_path.replace(os.sep, '/')
                 audio_files.append(rel_path)
     return sorted(audio_files)
@@ -84,12 +89,10 @@ def has_embedded_art(filepath):
         audio = mutagen.File(filepath)
         if audio is None:
             return False
-        # MP3 / ID3
         if hasattr(audio, 'tags') and audio.tags:
             for key in audio.tags.keys():
                 if key.startswith('APIC'):
                     return True
-        # FLAC / Ogg Vorbis
         if hasattr(audio, 'pictures') and audio.pictures:
             return True
     except Exception:
@@ -125,22 +128,16 @@ def extract_audio_tags(full_path, rel_path):
     try:
         audio = mutagen.File(full_path)
         if audio is not None:
-            # ID3 (MP3)
             if hasattr(audio, 'tags') and audio.tags:
-                if 'TPE1' in audio.tags:
-                    artist = str(audio.tags['TPE1'])
-                elif 'TPE2' in audio.tags:
-                    artist = str(audio.tags['TPE2'])
-                if 'TIT2' in audio.tags:
-                    title = str(audio.tags['TIT2'])
+                if 'TPE1' in audio.tags: artist = str(audio.tags['TPE1'])
+                elif 'TPE2' in audio.tags: artist = str(audio.tags['TPE2'])
+                if 'TIT2' in audio.tags: title = str(audio.tags['TIT2'])
 
-            # Vorbis comments (FLAC, OGG)
             if not artist and hasattr(audio, 'get'):
                 artist = audio.get('artist', [None])[0] or audio.get('albumartist', [None])[0]
             if not title and hasattr(audio, 'get'):
                 title = audio.get('title', [None])[0]
 
-            # Generic fallback
             if not artist:
                 if 'artist' in audio:
                     val = audio['artist']
@@ -244,10 +241,8 @@ def get_radio_recommendation(username, history_list=None):
 # COVER & VIDEO HELPERS
 # ---------------------------------------------------------
 def generate_placeholder_cover(artist, title):
-    """Generate a deterministic colored SVG placeholder with initials."""
     h = hashlib.md5((artist + title).encode('utf-8')).hexdigest()
     bg_color = f"#{h[:6]}"
-    # Simple brightness check for text color
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     brightness = (r * 299 + g * 587 + b * 114) / 1000
     text_color = "#111111" if brightness > 180 else "#ffffff"
@@ -258,8 +253,7 @@ def generate_placeholder_cover(artist, title):
             initials += word[0].upper()
             if len(initials) >= 2:
                 break
-    if not initials:
-        initials = "♪"
+    if not initials: initials = "♪"
 
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 500 500">
         <rect width="500" height="500" fill="{bg_color}"/>
@@ -269,15 +263,10 @@ def generate_placeholder_cover(artist, title):
     return svg
 
 def search_youtube_video(artist, song):
-    """Robust YouTube search with multiple strategies and ad-filtering."""
-    if not artist or artist == "Unknown Artist":
-        return None
-
+    if not artist or artist == "Unknown Artist": return None
     cache_key = f"{artist} | {song}"
-    if cache_key in video_cache:
-        return video_cache[cache_key]
+    if cache_key in video_cache: return video_cache[cache_key]
 
-    # Try progressively broader searches
     queries = [
         f"{artist} {song} official music video",
         f"{artist} {song}",
@@ -294,8 +283,6 @@ def search_youtube_video(artist, song):
             })
             with urllib.request.urlopen(req, timeout=5.0) as resp:
                 html = resp.read().decode('utf-8')
-
-                # Strategy 1: Look for actual videoRenderer objects (avoids ads/shelves)
                 matches = re.findall(r'"videoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})"', html)
                 if matches:
                     vid = matches[0]
@@ -303,7 +290,6 @@ def search_youtube_video(artist, song):
                     save_json_file(VIDEO_CACHE_FILE, video_cache)
                     return vid
 
-                # Strategy 2: General videoId fallback, skip first 2 matches (often ads/promos)
                 matches = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
                 if len(matches) > 2:
                     vid = matches[2]
@@ -315,13 +301,11 @@ def search_youtube_video(artist, song):
                     video_cache[cache_key] = vid
                     save_json_file(VIDEO_CACHE_FILE, video_cache)
                     return vid
-        except Exception:
-            continue
+        except Exception: continue
 
     video_cache[cache_key] = None
     save_json_file(VIDEO_CACHE_FILE, video_cache)
     return None
-
 
 # ---------------------------------------------------------
 # HIGH-END HTML & UI TEMPLATE
@@ -335,32 +319,42 @@ HTML_TEMPLATE = """
     <title>Streamer Pro</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
-        :root { --bg: #050505; --panel: #121212; --highlight: #222222; --text: #ffffff; --subtext: #a7a7a7; --accent: #1DB954; --card-bg: #181818; }
+        :root { --bg: {{ user_bg | default('#050505') }}; --panel: #121212; --highlight: #222222; --text: #ffffff; --subtext: #a7a7a7; --accent: #1DB954; --card-bg: #181818; }
         * { box-sizing: border-box; }
+        
         body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: radial-gradient(circle at top left, #1a1a1a 0%, var(--bg) 100%); color: var(--text); margin: 0; overflow: hidden; display: flex; height: 100vh; }
+        
         .sidebar { width: 240px; background: transparent; padding: 24px 16px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; z-index: 10; }
         .logo { font-size: 20px; font-weight: 800; padding: 0 12px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; letter-spacing: 0.5px; }
         .nav-section-title { font-size: 11px; text-transform: uppercase; color: var(--subtext); letter-spacing: 1.2px; padding: 12px 12px 4px 12px; font-weight: 700; }
         .nav-item { padding: 10px 12px; border-radius: 6px; cursor: pointer; color: var(--subtext); font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 15px; transition: all 0.2s ease; }
         .nav-item:hover, .nav-item.active { color: var(--text); background: var(--highlight); }
         .nav-item i { font-size: 18px; width: 20px; text-align: center; }
+        
         .center-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; position: relative; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
         .top-bar { height: 64px; background: rgba(18,18,18,0.7); backdrop-filter: blur(20px); display: flex; align-items: center; justify-content: space-between; padding: 0 32px; position: absolute; top: 0; left: 0; right: 0; z-index: 50; border-radius: 12px 12px 0 0; }
         .main-content { flex: 1; padding: 84px 32px 32px 32px; overflow-y: auto; scroll-behavior: smooth; }
+        
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .fade-in { animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        
         .right-panel { width: 340px; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; padding: 24px; display: none; flex-direction: column; align-items: center; text-align: center; overflow: hidden; transition: 0.3s; flex-shrink: 0; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
+        
         .rp-media-container { position: relative; width: 220px; height: 220px; margin: 15px 0 25px 0; }
         .rp-cover-glow { position: absolute; top: 10%; left: 10%; width: 80%; height: 80%; filter: blur(35px); opacity: 0.65; z-index: 1; transition: background-image 0.5s ease; background-size: cover; background-position: center; border-radius: 50%; }
         #rp-cover { position: absolute; z-index: 2; top:0; left:0; width: 100%; height: 100%; border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.7); object-fit: cover; transition: opacity 0.5s ease; }
         #rp-video-container { position: absolute; top:0; left:0; width:100%; height:100%; border-radius: 8px; overflow: hidden; z-index: 3; opacity: 0; transition: opacity 0.5s; pointer-events: none; box-shadow: 0 12px 30px rgba(0,0,0,0.7); }
         #rp-video { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 600px; height: 337px; }
+
         #visualizer { width: 100%; height: 50px; display: block; filter: drop-shadow(0px 0px 8px rgba(29, 185, 84, 0.5)); margin-top: 5px; }
+
         .player-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 88px; background: #000; border-top: 1px solid #222; display: flex; align-items: center; padding: 0 24px; justify-content: space-between; z-index: 1000; }
+        
         .search-container { display: flex; align-items: center; background: #242424; border-radius: 24px; padding: 8px 16px; width: 320px; border: 1px solid transparent; transition: 0.2s; }
         .search-container:focus-within { border-color: #555; background: #2a2a2a; }
         .search-container i { color: var(--subtext); font-size: 14px; margin-right: 10px; }
         .search-container input { background: transparent; border: none; color: white; width: 100%; outline: none; font-size: 14px; }
+        
         .user-badge-wrapper { position: relative; display: inline-block; }
         .user-badge { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; background: #1a1a1a; padding: 6px 14px; border-radius: 20px; border: 1px solid #333; cursor: pointer; transition: 0.2s; }
         .user-badge:hover { background: #2a2a2a; border-color: #555; }
@@ -369,49 +363,61 @@ HTML_TEMPLATE = """
         .dropdown-item { padding: 12px 16px; font-size: 13px; font-weight: 600; color: var(--subtext); display: flex; align-items: center; gap: 12px; cursor: pointer; text-decoration: none; transition: 0.2s; }
         .dropdown-item:hover { background: #333; color: var(--text); }
         .dropdown-divider { height: 1px; background: #3d3d3d; margin: 4px 0; }
+
         h2 { font-size: 26px; font-weight: 700; margin-top: 0; margin-bottom: 24px; letter-spacing: -0.5px; }
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 20px; margin-bottom: 40px; }
         .scroll-row { display: flex; gap: 20px; overflow-x: auto; padding-bottom: 16px; margin-bottom: 36px; scroll-snap-type: x mandatory; }
         .scroll-row .card { min-width: 180px; flex-shrink: 0; scroll-snap-align: start; }
+        
         .card { background: var(--card-bg); padding: 14px; border-radius: 8px; cursor: pointer; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); position: relative; text-align: left; }
         .card:hover { background: #252525; transform: translateY(-6px); box-shadow: 0 12px 30px rgba(0,0,0,0.6); }
         .card-img-container { width: 100%; aspect-ratio: 1; background: #222; border-radius: 6px; margin-bottom: 12px; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 36px; color: #444; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
         .card-img-container img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; }
+        
         .card-play-overlay { position: absolute; bottom: 10px; right: 10px; background: var(--accent); color: #000; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; opacity: 0; transform: translateY(10px); transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 8px 15px rgba(0,0,0,0.5); z-index: 2;}
         .card:hover .card-play-overlay { opacity: 1; transform: translateY(0); }
         .card-play-overlay:hover { transform: scale(1.1) !important; background: #1ed760; }
+
         .card-info { display: flex; flex-direction: column; gap: 4px; }
         .card-title { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .card-bottom-row { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
         .card-artist { font-weight: 500; color: var(--subtext); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; padding-right: 8px; }
         .card-stats { display: flex; gap: 8px; font-size: 11px; color: var(--subtext); }
+        
         .now-playing-info { width: 28%; display: flex; align-items: center; gap: 14px; }
         .np-cover { width: 56px; height: 56px; background: #222; border-radius: 6px; object-fit: cover; box-shadow: 0 4px 12px rgba(0,0,0,0.5); cursor: pointer;}
         .np-text { display: flex; flex-direction: column; overflow: hidden; }
         .np-title { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .np-artist { color: var(--subtext); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+        
         .controls { width: 44%; display: flex; flex-direction: column; align-items: center; gap: 6px; }
         .buttons { display: flex; gap: 20px; align-items: center; }
         .volume-controls { display: flex; align-items: center; gap: 12px; width: 28%; justify-content: flex-end; color: var(--subtext); }
+        
         @keyframes pop { 0% { transform: scale(1); } 50% { transform: scale(1.35); } 100% { transform: scale(1); } }
         .pop-anim { animation: pop 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        
         .btn { background: none; border: none; color: var(--subtext); font-size: 16px; cursor: pointer; transition: color 0.2s; outline: none; }
         .btn:hover { color: var(--text); }
         .btn.active#like-btn i, .btn.active.shuffle i, .btn.active.repeat i { color: var(--accent) !important; }
-        .btn.active#dislike-btn i { color: #ff5555 !important; }
+        .btn.active#dislike-btn i { color: #ff5555 !important; } 
         .btn.play-btn { background: var(--text); color: var(--bg); height: 34px; width: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: transform 0.2s; }
         .btn.play-btn:hover { transform: scale(1.08); color: var(--bg); }
         audio { display: none; }
+        
         input[type=range] { -webkit-appearance: none; background: #4d4d4d; height: 4px; border-radius: 2px; outline: none; cursor: pointer; width: 100%; transition: 0.1s; }
         input[type=range]:hover { height: 6px; }
         input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #fff; opacity: 0; transition: 0.1s; box-shadow: 0 2px 4px rgba(0,0,0,0.5); }
         input[type=range]:hover::-webkit-slider-thumb { opacity: 1; }
+        
         .lyrics-container { position: relative; width: 100%; flex: 1; overflow-y: auto; text-align: left; padding-top: 20px; padding-bottom: 80px; scroll-behavior: smooth; mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); }
         .lyric-line { font-size: 17px; color: rgba(255, 255, 255, 0.35); padding: 8px 12px; margin: 4px 0; border-radius: 6px; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); font-weight: 600; cursor: pointer; transform-origin: left center; }
         .lyric-line:hover { color: rgba(255, 255, 255, 0.8); background: rgba(255,255,255,0.03); }
         .lyric-line.active { color: var(--accent); font-size: 21px; font-weight: 700; text-shadow: 0 0 15px rgba(29, 185, 84, 0.4); transform: translateX(4px); opacity: 1; }
+        
         .lyric-word { transition: all 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275); display: inline-block; }
         .lyric-word.active-word { color: #ff9500 !important; text-shadow: 0 0 18px rgba(255, 149, 0, 0.9) !important; transform: scale(1.15) translateY(-2px); }
+        
         .admin-card { background: #181818; border: 1px solid #282828; border-radius: 10px; padding: 24px; margin-bottom: 24px; max-width: 700px; }
         .admin-table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14px; text-align: left; }
         .admin-table th, .admin-table td { padding: 12px 14px; border-bottom: 1px solid #222; }
@@ -422,15 +428,18 @@ HTML_TEMPLATE = """
         .action-btn:hover { background: #383838; }
         .action-btn.danger { background: rgba(255,85,85,0.15); color: #ff5555; }
         .action-btn.danger:hover { background: rgba(255,85,85,0.3); }
+
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 2000; align-items: center; justify-content: center; backdrop-filter: blur(5px); }
         .modal-card { background: #181818; border: 1px solid #333; padding: 30px; border-radius: 12px; width: 380px; box-shadow: 0 20px 40px rgba(0,0,0,0.8); text-align: center; }
         .modal-card h3 { margin-top: 0; margin-bottom: 20px; }
         .playlist-select-item { padding: 12px 16px; background: #222; border-radius: 6px; margin-bottom: 8px; cursor: pointer; font-weight: 600; text-align: left; display: flex; justify-content: space-between; align-items: center; transition: 0.2s; }
         .playlist-select-item:hover { background: #2a2a2a; border-color: var(--accent); color: var(--accent); }
+
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+        
         .auth-container { width: 100%; height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
         .auth-card { background: var(--panel); padding: 40px; border-radius: 12px; text-align: center; width: 340px; border: 1px solid #222; box-shadow: 0 15px 35px rgba(0,0,0,0.8); }
         .auth-card h2 { margin-bottom: 20px; font-size: 24px; }
@@ -438,6 +447,7 @@ HTML_TEMPLATE = """
         input[type=text]:focus, input[type=password]:focus { border-color: var(--accent); }
         button.primary { background: var(--accent); color: black; border: none; padding: 12px 24px; border-radius: 24px; font-weight: 700; cursor: pointer; margin-top: 10px; width: 100%; font-size: 15px; transition: 0.2s; }
         button.primary:hover { transform: scale(1.02); background: #1ed760; }
+        
         .eq-container { display: flex; align-items: flex-end; gap: 3px; height: 16px; }
         .eq-bar { width: 3px; background: var(--accent); border-radius: 1px; animation: eqbounce 1s infinite ease-in-out; }
         .eq-bar:nth-child(1) { height: 40%; animation-delay: 0s; }
@@ -475,14 +485,14 @@ HTML_TEMPLATE = """
         <div class="logo"><i class="fab fa-spotify" style="color:var(--accent)"></i> Streamer Pro</div>
         
         <div class="nav-section-title">Discover</div>
-        <div class="nav-item active" onclick="switchView('home')"><i class="fas fa-home"></i> Home</div>
+        <div class="nav-item active" onclick="switchView('home', this)"><i class="fas fa-home"></i> Home</div>
         <div class="nav-item" onclick="document.getElementById('global-search').focus();"><i class="fas fa-search"></i> Search</div>
-        <div class="nav-item" onclick="switchView('artists')"><i class="fas fa-microphone"></i> Artists</div>
-        <div class="nav-item" onclick="switchView('playlists')"><i class="fas fa-list-music"></i> Playlists</div>
-        <div class="nav-item" onclick="switchView('radio')"><i class="fas fa-broadcast-tower"></i> Infinite Radio</div>
+        <div class="nav-item" onclick="switchView('artists', this)"><i class="fas fa-microphone"></i> Artists</div>
+        <div class="nav-item" onclick="switchView('playlists', this)"><i class="fas fa-list-music"></i> Playlists</div>
+        <div class="nav-item" onclick="switchView('radio', this)"><i class="fas fa-broadcast-tower"></i> Infinite Radio</div>
         
         <div class="nav-section-title" style="margin-top: 16px;">General</div>
-        <div class="nav-item" onclick="switchView('settings')"><i class="fas fa-cog"></i> Settings</div>
+        <div class="nav-item" onclick="switchView('settings', this)"><i class="fas fa-cog"></i> Settings</div>
     </div>
 
     <div class="center-wrapper">
@@ -494,8 +504,12 @@ HTML_TEMPLATE = """
             
             <div class="user-badge-wrapper">
                 <div class="user-badge" onclick="toggleSettingsMenu()">
-                    <i class="fas fa-user-circle" style="color: var(--accent); font-size:18px;"></i> 
-                    {{ session.user }} 
+                    {% if user_pfp %}
+                        <img src="{{ user_pfp }}" style="width: 24px; height: 24px; border-radius: 50%; object-fit: cover;">
+                    {% else %}
+                        <i class="fas fa-user-circle" style="color: var(--accent); font-size:18px;"></i> 
+                    {% endif %}
+                    <span id="display-username">{{ session.user }}</span>
                     <i class="fas fa-caret-down" style="font-size: 11px;"></i>
                 </div>
                 <div class="settings-dropdown" id="settings-dropdown">
@@ -937,11 +951,10 @@ HTML_TEMPLATE = """
             groupedArtists = newGrouped;
         }
 
-        function switchView(view) {
-            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-            if (event && event.currentTarget && event.currentTarget.classList) {
-                event.currentTarget.classList.add('active');
-            }
+        function switchView(view, el=null) {
+            document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
+            if(el) el.classList.add('active');
+            
             document.getElementById('global-search').value = '';
 
             if (view === 'home') renderHome();
@@ -968,13 +981,10 @@ HTML_TEMPLATE = """
 
         function buildCardsHTML(songsArray, isRow = false, playlistToken = null) {
             let html = isRow ? `<div class="scroll-row">` : `<div class="grid">`;
-            
-            // Extract just the filenames to pass to playQueue safely
             let filenameArr = JSON.stringify(songsArray.map(s => s.filename)).replace(/"/g, '&quot;');
             
             songsArray.forEach((song, i) => {
                 let coverUrl = getCoverUrl(song);
-                let stats = songStats[song.filename] || {likes: 0, dislikes: 0, plays: 0};
                 let cleanTitle = song.title.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
                 let cleanArtist = song.artist.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
                 let cleanFilename = song.filename.replace(/'/g, "\\'");
@@ -1172,8 +1182,32 @@ HTML_TEMPLATE = """
             let html = `
                 <div class="fade-in">
                 <h2>⚙️ Settings</h2>
+                
+                <div class="admin-card" style="margin-bottom:24px;">
+                    <h3 style="margin-top:0; font-size:16px;">Profile Customization</h3>
+                    <form onsubmit="changeUsername(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 350px; margin-bottom: 24px;">
+                        <div>
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">Change Username</div>
+                            <input type="text" id="new-username-input" required style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
+                        </div>
+                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700; margin-top:4px;">Update Username</button>
+                    </form>
+
+                    <form onsubmit="updateProfile(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 350px;">
+                        <div>
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">Profile Picture Upload</div>
+                            <input type="file" id="pfp-input" accept="image/*" style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
+                        </div>
+                        <div>
+                            <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">App Background Color</div>
+                            <input type="color" id="bg-color-input" value="${getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()}" style="margin:0; background:#222; border:1px solid #333; border-radius:6px; cursor:pointer; width:100%; height:40px;">
+                        </div>
+                        <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700; margin-top:4px;">Save Customizations</button>
+                    </form>
+                </div>
+
                 <div class="admin-card">
-                    <h3 style="margin-top:0; font-size:16px;">Change Your Password</h3>
+                    <h3 style="margin-top:0; font-size:16px;">Change Password</h3>
                     <form onsubmit="changePassword(event)" style="display:flex; flex-direction:column; gap:12px; max-width: 350px;">
                         <div>
                             <div style="font-size:13px; color:var(--subtext); margin-bottom:4px;">Current Password</div>
@@ -1215,6 +1249,59 @@ HTML_TEMPLATE = """
             html += `</div>`;
             contentDiv.innerHTML = html;
             if (currentUserIsAdmin) loadUsersTable();
+        }
+
+        function changeUsername(e) {
+            e.preventDefault();
+            let new_name = document.getElementById('new-username-input').value;
+            fetch('/api/settings/username', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({new_username: new_name})
+            }).then(res => res.json()).then(data => {
+                if (data.success) {
+                    alert("Username changed successfully! Reloading...");
+                    window.location.reload();
+                } else {
+                    alert(data.error || "Failed to change username.");
+                }
+            });
+        }
+
+        function updateProfile(e) {
+            e.preventDefault();
+            let formData = new FormData();
+            let fileInput = document.getElementById('pfp-input');
+            if (fileInput.files.length > 0) {
+                formData.append('pfp', fileInput.files[0]);
+            }
+            formData.append('bg_color', document.getElementById('bg-color-input').value);
+
+            fetch('/api/settings/profile', {
+                method: 'POST',
+                body: formData
+            }).then(res => res.json()).then(data => {
+                if (data.success) {
+                    alert("Profile updated successfully!");
+                    window.location.reload();
+                } else {
+                    alert("Failed to update profile.");
+                }
+            });
+        }
+
+        function changePassword(e) {
+            e.preventDefault();
+            let curr = document.getElementById('curr-pass').value;
+            let newp = document.getElementById('new-pass-user').value;
+            fetch('/api/settings/password', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({current_password: curr, new_password: newp})
+            }).then(res => res.json()).then(data => {
+                if(data.success) { alert("Password updated successfully!"); document.getElementById('curr-pass').value = ''; document.getElementById('new-pass-user').value = '';}
+                else { alert(data.error || "Failed to update password"); }
+            });
         }
 
         function loadUsersTable() {
@@ -1598,16 +1685,16 @@ def index():
 
     if not users:
         if request.method == 'POST':
-            username = request.form['username']
+            username = request.form['username'].strip()
             password = generate_password_hash(request.form['password'])
-            db["users"] = {username: {'password': password, 'is_admin': True, 'likes': [], 'dislikes': [], 'play_counts': {}}}
+            db["users"] = {username: {'password': password, 'is_admin': True, 'likes': [], 'dislikes': [], 'play_counts': {}, 'bg_color': '#050505', 'pfp': ''}}
             save_db(db)
             return redirect(url_for('index'))
         return render_template_string(HTML_TEMPLATE, logged_in=False, setup=True)
 
     if 'user' not in session:
         if request.method == 'POST':
-            username = request.form['username']
+            username = request.form['username'].strip()
             password = request.form['password']
             if username in users and check_password_hash(users[username]['password'], password):
                 session['user'] = username
@@ -1617,9 +1704,11 @@ def index():
 
     current_user_data = users.get(session['user'], {})
     is_admin = current_user_data.get('is_admin', False)
+    user_pfp = current_user_data.get('pfp', '')
+    user_bg = current_user_data.get('bg_color', '#050505')
     session['is_admin'] = is_admin
 
-    return render_template_string(HTML_TEMPLATE, logged_in=True, is_admin=is_admin)
+    return render_template_string(HTML_TEMPLATE, logged_in=True, is_admin=is_admin, user_pfp=user_pfp, user_bg=user_bg)
 
 @app.route('/logout')
 def logout():
@@ -1758,6 +1847,54 @@ def api_feedback():
     save_db(db)
     return jsonify({"success": True})
 
+# --- PROFILE CUSTOMIZATION API ROUTES ---
+@app.route('/api/settings/username', methods=['POST'])
+def change_username_api():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    new_name = request.json.get('new_username', '').strip()
+    if not new_name or len(new_name) < 3: return jsonify({"error": "Username must be at least 3 characters."})
+    
+    db = load_db()
+    old_name = session['user']
+    
+    if new_name == old_name: return jsonify({"success": True})
+    if new_name in db["users"]: return jsonify({"error": "Username already taken."})
+    
+    # Safely migrate all user data to the new key
+    db["users"][new_name] = db["users"].pop(old_name)
+    
+    # Update playlist creator tags
+    for pl in db.get("playlists", {}).values():
+        if pl["creator"] == old_name:
+            pl["creator"] = new_name
+            
+    save_db(db)
+    session['user'] = new_name
+    return jsonify({"success": True, "new_username": new_name})
+
+@app.route('/api/settings/profile', methods=['POST'])
+def update_profile_api():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    user_data = db["users"][session['user']]
+    
+    bg_color = request.form.get('bg_color')
+    if bg_color: user_data['bg_color'] = bg_color
+    
+    if 'pfp' in request.files:
+        file = request.files['pfp']
+        if file.filename != '':
+            ext = os.path.splitext(file.filename)[1].lower()
+            if ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']:
+                # Save the new profile picture locally with a unique UUID to prevent caching issues
+                filename = f"pfp_{uuid.uuid4().hex[:8]}{ext}"
+                filepath = os.path.join(PROFILES_DIR, filename)
+                file.save(filepath)
+                user_data['pfp'] = f"/Profiles/{filename}"
+    
+    save_db(db)
+    return jsonify({"success": True})
+
 @app.route('/api/settings/password', methods=['POST'])
 def change_password_api():
     if 'user' not in session:
@@ -1802,7 +1939,9 @@ def admin_users_api():
             "is_admin": is_admin,
             "likes": [],
             "dislikes": [],
-            "play_counts": {}
+            "play_counts": {},
+            "bg_color": "#050505",
+            "pfp": ""
         }
         save_db(db)
         return jsonify({"success": True})
@@ -1854,6 +1993,10 @@ def api_video():
 
     youtube_id = search_youtube_video(artist, song)
     return jsonify({"youtube_id": youtube_id})
+
+@app.route('/Profiles/<path:filename>')
+def serve_profiles(filename):
+    return send_from_directory(PROFILES_DIR, filename)
 
 if __name__ == '__main__':
     print(f"🎵 App running on port {PORT}! Open http://localhost:{PORT}")
