@@ -370,6 +370,7 @@ HTML_TEMPLATE = """
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .fade-in { animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         
+        /* Right Panel Layout */
         .right-panel { width: 340px; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; padding: 24px; display: none; flex-direction: column; text-align: center; overflow: hidden; transition: 0.3s; flex-shrink: 0; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
         .rp-header-row { display: flex; justify-content: space-between; width: 100%; align-items: center; margin-bottom: 16px;}
         .rp-tabs { display: flex; gap: 8px; background: #1a1a1a; padding: 4px; border-radius: 20px; }
@@ -435,6 +436,7 @@ HTML_TEMPLATE = """
         .btn.active#dislike-btn i { color: #ff5555 !important; }
         .btn.play-btn { background: var(--text); color: var(--bg); height: 34px; width: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: transform 0.2s; }
         .btn.play-btn:hover { transform: scale(1.08); color: var(--bg); }
+        /* Removed crossorigin="anonymous" to fix session cookies */
         audio { display: none; }
         input[type=range] { -webkit-appearance: none; background: #4d4d4d; height: 4px; border-radius: 2px; outline: none; cursor: pointer; width: 100%; transition: 0.1s; }
         input[type=range]:hover { height: 6px; }
@@ -606,7 +608,7 @@ HTML_TEMPLATE = """
                 <input type="range" id="progress-bar" value="0" max="100">
                 <span id="time-total">0:00</span>
             </div>
-            <audio id="audio-player" crossorigin="anonymous"></audio>
+            <audio id="audio-player"></audio>
         </div>
         
         <div class="volume-controls">
@@ -1760,55 +1762,6 @@ HTML_TEMPLATE = """
 </html>
 """
 
-PUBLIC_PLAYLIST_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ playlist.name }} - Streamer Pro</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <style>
-        :root { --bg: #050505; --panel: #121212; --highlight: #222222; --text: #ffffff; --subtext: #a7a7a7; --accent: #1DB954; --card-bg: #181818; }
-        body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 40px; display: flex; flex-direction: column; align-items: center; }
-        .container { width: 100%; max-width: 900px; background: var(--panel); padding: 40px; border-radius: 12px; box-shadow: 0 15px 35px rgba(0,0,0,0.8); border: 1px solid #222; }
-        h1 { margin-top: 0; font-size: 32px; }
-        .song-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--card-bg); border-radius: 8px; margin-bottom: 12px; border: 1px solid #282828; }
-        .song-info { display: flex; align-items: center; gap: 16px; }
-        .song-info img { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; }
-        .primary-btn { background: var(--accent); color: black; border: none; padding: 10px 20px; border-radius: 24px; font-weight: 700; cursor: pointer; text-decoration: none; display: inline-block; }
-        .primary-btn:hover { background: #1ed760; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:30px;">
-            <div>
-                <h1>🎵 {{ playlist.name }}</h1>
-                <p style="color:var(--subtext); margin:0;">Shared Playlist • Created by <strong>{{ playlist.creator }}</strong></p>
-            </div>
-            <a href="/" class="primary-btn"><i class="fas fa-home"></i> Open Streamer Pro</a>
-        </div>
-
-        <h3>Tracks ({{ songs|length }})</h3>
-        <div style="margin-top:20px;">
-            {% for song in songs %}
-            <div class="song-row">
-                <div class="song-info">
-                    <img src="/api/cover?file={{ song.filename | urlencode }}">
-                    <div>
-                        <div style="font-weight:700; font-size:15px;">{{ song.title }}</div>
-                        <div style="color:var(--subtext); font-size:13px; margin-top:2px;">{{ song.artist }}</div>
-                    </div>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-</body>
-</html>
-"""
-
 # ---------------------------------------------------------
 # ROUTE HANDLERS
 # ---------------------------------------------------------
@@ -1865,22 +1818,25 @@ def logout():
 @app.route('/play/<path:filename>')
 def play(filename):
     if 'user' not in session: return "Unauthorized", 401
-    full_path = resolve_audio_path(filename)
-    if not os.path.exists(full_path):
-        return "Audio file not found", 404
-    dir_name = os.path.dirname(full_path)
-    base_name = os.path.basename(full_path)
-    return send_from_directory(dir_name, base_name)
+    
+    # Safely route the file from the Persistent Volume OR Local Github folder
+    if os.path.exists(os.path.join(MUSIC_DIR, filename)):
+        return send_from_directory(MUSIC_DIR, filename)
+    elif os.path.exists(os.path.join("./Music", filename)):
+        return send_from_directory(os.path.abspath("./Music"), filename)
+        
+    return "Audio file not found", 404
 
 @app.route('/download/<path:filename>')
 def download(filename):
     if 'user' not in session: return "Unauthorized", 401
-    full_path = resolve_audio_path(filename)
-    if not os.path.exists(full_path):
-        return "Audio file not found", 404
-    dir_name = os.path.dirname(full_path)
-    base_name = os.path.basename(full_path)
-    return send_from_directory(dir_name, base_name, as_attachment=True)
+    
+    if os.path.exists(os.path.join(MUSIC_DIR, filename)):
+        return send_from_directory(MUSIC_DIR, filename, as_attachment=True)
+    elif os.path.exists(os.path.join("./Music", filename)):
+        return send_from_directory(os.path.abspath("./Music"), filename, as_attachment=True)
+        
+    return "Audio file not found", 404
 
 @app.route('/api/data')
 def api_data():
@@ -2270,8 +2226,8 @@ def api_cover():
             audio = mutagen.File(filepath)
             if audio is not None:
                 if hasattr(audio, 'tags') and audio.tags:
-                    for key in audio.tags.keys():
-                        if key.startswith('APIC'):
+                    for key in list(audio.tags.keys()):
+                        if key.startswith('APIC') or key.startswith('COVR'):
                             pic = audio.tags[key]
                             mime = getattr(pic, 'mime', 'image/jpeg')
                             return send_file(io.BytesIO(pic.data), mimetype=mime)
@@ -2294,7 +2250,7 @@ def api_cover():
                     if f_lower.endswith(valid_exts):
                         f_base = os.path.splitext(f_lower)[0]
                         if f_base in ['cover', 'folder', 'front', song_clean]:
-                            return send_from_directory(song_dir, f)
+                            return send_from_directory(os.path.abspath(song_dir), f)
             except Exception:
                 pass
 
