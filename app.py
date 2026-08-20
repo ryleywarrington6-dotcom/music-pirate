@@ -25,10 +25,10 @@ except ImportError:
 
 PORT = int(os.environ.get("PORT", 8000))
 
-# DATA_DIR points to our persistent Railway Volume
+# DATA_DIR points to persistent Railway Volume
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 
-# Move Music into DATA_DIR so uploaded files persist forever on Railway
+# Set up directory paths
 MUSIC_DIR = os.environ.get("MUSIC_DIR", os.path.join(DATA_DIR, "Music"))
 CACHE_DIR = os.path.join(DATA_DIR, "Cache_Art")
 PROFILES_DIR = os.path.join(DATA_DIR, "Profiles")
@@ -41,8 +41,34 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(PROFILES_DIR, exist_ok=True)
 
 app = Flask(__name__)
-# Use a persistent random key if not set
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(32).hex())
+
+# ---------------------------------------------------------
+# PATH RESOLUTION & DUAL-DIRECTORY HELPERS
+# ---------------------------------------------------------
+def resolve_audio_path(rel_path):
+    """Checks persistent storage first, then falls back to repository ./Music folder."""
+    p1 = os.path.join(MUSIC_DIR, rel_path)
+    if os.path.exists(p1):
+        return p1
+    p2 = os.path.join("./Music", rel_path)
+    if os.path.exists(p2):
+        return p2
+    return p1
+
+def get_all_filepaths():
+    """Scans both DATA_DIR/Music and ./Music to ensure all tracks are found."""
+    audio_files = set()
+    scan_dirs = [MUSIC_DIR, "./Music"]
+    for folder in scan_dirs:
+        if os.path.exists(folder):
+            for root, dirs, files in os.walk(folder):
+                for file in files:
+                    if file.lower().endswith(('.mp3', '.flac', '.ogg', '.m4a', '.wav')):
+                        full_path = os.path.join(root, file)
+                        rel_path = os.path.relpath(full_path, folder).replace(os.sep, '/')
+                        audio_files.add(rel_path)
+    return sorted(list(audio_files))
 
 # ---------------------------------------------------------
 # DATABASE & CACHE HELPERS
@@ -77,17 +103,6 @@ def _save_meta_cache():
 
 atexit.register(_save_meta_cache)
 
-def get_all_filepaths():
-    audio_files = []
-    for root, dirs, files in os.walk(MUSIC_DIR):
-        for file in files:
-            if file.lower().endswith(('.mp3', '.flac', '.ogg', '.m4a', '.wav')):
-                full_path = os.path.join(root, file)
-                rel_path = os.path.relpath(full_path, MUSIC_DIR)
-                rel_path = rel_path.replace(os.sep, '/')
-                audio_files.append(rel_path)
-    return sorted(audio_files)
-
 def has_embedded_art(filepath):
     try:
         audio = mutagen.File(filepath)
@@ -98,7 +113,6 @@ def has_embedded_art(filepath):
         if hasattr(audio, 'pictures') and audio.pictures: return True
     except Exception: pass
     
-    # Check for local folder cover art
     song_dir = os.path.dirname(filepath)
     song_clean = os.path.splitext(os.path.basename(filepath))[0].lower()
     valid_exts = ('.jpg', '.jpeg', '.png', '.webp')
@@ -175,7 +189,7 @@ def extract_audio_tags(full_path, rel_path):
     return artist, title
 
 def get_song_metadata(rel_path):
-    full_path = os.path.join(MUSIC_DIR, rel_path)
+    full_path = resolve_audio_path(rel_path)
     mtime = os.path.getmtime(full_path) if os.path.exists(full_path) else 0
 
     if rel_path in meta_cache:
@@ -295,8 +309,43 @@ def search_youtube_video(artist, song):
     return None
 
 # ---------------------------------------------------------
-# HIGH-END HTML & UI TEMPLATE
+# HIGH-END HTML & UI TEMPLATES
 # ---------------------------------------------------------
+LOGIN_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Streamer Pro - Login</title>
+    <style>
+        :root { --bg: #050505; --panel: #121212; --accent: #1DB954; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: white; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .auth-card { background: var(--panel); padding: 40px; border-radius: 12px; text-align: center; width: 340px; border: 1px solid #222; box-shadow: 0 15px 35px rgba(0,0,0,0.8); }
+        input { width: 100%; padding: 12px 16px; margin: 8px 0 16px 0; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: white; font-size: 14px; outline: none; box-sizing: border-box; }
+        input:focus { border-color: var(--accent); }
+        button { background: var(--accent); color: black; border: none; padding: 12px 24px; border-radius: 24px; font-weight: 700; cursor: pointer; width: 100%; font-size: 15px; margin-top: 10px; transition: 0.2s; }
+        button:hover { background: #1ed760; transform: scale(1.02); }
+    </style>
+</head>
+<body>
+    <div class="auth-card">
+        <h2 style="margin-top:0;">{{ 'Setup Master Admin' if setup else 'Log In' }}</h2>
+        {% if error %}
+            <p style="color:#ff5555; font-size:13px; font-weight:600;">{{ error }}</p>
+        {% endif %}
+        <form method="POST">
+            <div style="text-align: left; font-size: 13px; color: #a7a7a7;">Username</div>
+            <input type="text" name="username" required>
+            <div style="text-align: left; font-size: 13px; color: #a7a7a7;">Password</div>
+            <input type="password" name="password" required>
+            <button type="submit">{{ 'Create Account' if setup else 'Log In' }}</button>
+        </form>
+    </div>
+</body>
+</html>
+"""
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -321,7 +370,6 @@ HTML_TEMPLATE = """
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .fade-in { animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         
-        /* Right Panel Layout */
         .right-panel { width: 340px; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; padding: 24px; display: none; flex-direction: column; text-align: center; overflow: hidden; transition: 0.3s; flex-shrink: 0; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
         .rp-header-row { display: flex; justify-content: space-between; width: 100%; align-items: center; margin-bottom: 16px;}
         .rp-tabs { display: flex; gap: 8px; background: #1a1a1a; padding: 4px; border-radius: 20px; }
@@ -434,17 +482,6 @@ HTML_TEMPLATE = """
         .chat-send-btn { background: var(--accent); color: black; border: none; width: 44px; height: 44px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: 0.2s; }
         .chat-send-btn:hover { transform: scale(1.05); }
 
-        ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
-        .auth-container { width: 100%; height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
-        .auth-card { background: var(--panel); padding: 40px; border-radius: 12px; text-align: center; width: 340px; border: 1px solid #222; box-shadow: 0 15px 35px rgba(0,0,0,0.8); }
-        .auth-card h2 { margin-bottom: 20px; font-size: 24px; }
-        input[type=text], input[type=password] { width: 100%; padding: 12px 16px; margin: 8px 0 16px 0; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: white; font-size: 14px; outline: none; transition: 0.2s; }
-        input[type=text]:focus, input[type=password]:focus { border-color: var(--accent); }
-        button.primary { background: var(--accent); color: black; border: none; padding: 12px 24px; border-radius: 24px; font-weight: 700; cursor: pointer; margin-top: 10px; width: 100%; font-size: 15px; transition: 0.2s; }
-        button.primary:hover { transform: scale(1.02); background: #1ed760; }
         .eq-container { display: flex; align-items: flex-end; gap: 3px; height: 16px; }
         .eq-bar { width: 3px; background: var(--accent); border-radius: 1px; animation: eqbounce 1s infinite ease-in-out; }
         .eq-bar:nth-child(1) { height: 40%; animation-delay: 0s; }
@@ -456,20 +493,6 @@ HTML_TEMPLATE = """
 </head>
 <body>
 
-{% if not logged_in %}
-    <div class="auth-container">
-        <div class="auth-card">
-            <h2>{{ 'Setup Admin Account' if setup else 'Welcome Back' }}</h2>
-            <form method="POST">
-                <div style="text-align: left; font-size: 13px; color: var(--subtext); margin-bottom: 4px;">Username</div>
-                <input type="text" name="username" required>
-                <div style="text-align: left; font-size: 13px; color: var(--subtext); margin-bottom: 4px;">Password</div>
-                <input type="password" name="password" required>
-                <button type="submit" class="primary">{{ 'Create Master Admin' if setup else 'Log In' }}</button>
-            </form>
-        </div>
-    </div>
-{% else %}
     <div class="modal-overlay" id="playlist-modal" onclick="if(event.target === this) closePlaylistModal()">
         <div class="modal-card">
             <h3>Add to Playlist</h3>
@@ -1214,7 +1237,7 @@ HTML_TEMPLATE = """
                             <div style="display:flex; gap:10px;">
                                 ${playlistSongs.length > 0 ? `<button class="action-btn" style="background:var(--accent); color:black; font-weight:700;" onclick="playQueueByFilenames(${filenameArr}, 0)"><i class="fas fa-play"></i> Play Playlist</button>` : ''}
                                 <button class="action-btn" onclick="navigator.clipboard.writeText('${shareUrl}'); alert('Shareable link copied to clipboard!');"><i class="fas fa-share-alt"></i> Share Link</button>
-                                <button class="action-btn danger" onclick="deletePlaylist('${token}')"><i class="fas fa-trash"></i> Delete</button>
+                                ${(pl.creator === currentSessionUser) || currentUserIsAdmin ? `<button class="action-btn danger" onclick="deletePlaylist('${token}')"><i class="fas fa-trash"></i> Delete</button>` : ''}
                             </div>
                         </div>
                         ${playlistSongs.length === 0 ? '<p style="color:var(--subtext);">This playlist is empty. Add songs from any track card!</p>' : buildCardsHTML(playlistSongs, false, token)}
@@ -1242,10 +1265,12 @@ HTML_TEMPLATE = """
                 let modalList = document.getElementById('playlist-modal-list');
                 let html = '';
 
-                if (Object.keys(playlists).length === 0) {
+                let myPlaylists = Object.entries(playlists).filter(([t, p]) => p.creator === currentSessionUser);
+
+                if (myPlaylists.length === 0) {
                     html = '<p style="color:var(--subtext);">No playlists found. Create one from the Playlists tab!</p>';
                 } else {
-                    for (let [token, pl] of Object.entries(playlists)) {
+                    for (let [token, pl] of myPlaylists) {
                         html += `<div class="playlist-select-item" onclick="confirmAddToPlaylist('${token}')">
                             <span><i class="fas fa-list"></i> ${pl.name.replace(/"/g, '&quot;')}</span>
                             <span style="font-size:12px; color:var(--subtext);">${pl.songs.length} tracks</span>
@@ -1495,7 +1520,7 @@ HTML_TEMPLATE = """
                 html += `
                 <div class="admin-card" style="margin-bottom:24px; border: 1px solid var(--accent);">
                     <h3 style="margin-top:0; font-size:16px; color:var(--accent)"><i class="fas fa-cloud-upload-alt"></i> Upload Music</h3>
-                    <p style="font-size:12px; color:var(--subtext); margin-top:0;">Upload MP3 or FLAC files directly to your server's persistent storage. (Upload in batches of 10-20 files for best results).</p>
+                    <p style="font-size:12px; color:var(--subtext); margin-top:0;">Upload MP3 or FLAC files directly to your server's persistent storage.</p>
                     <form onsubmit="uploadMusic(event)" style="display:flex; flex-direction:column; gap:12px;">
                         <input type="file" id="music-upload-input" accept="audio/mpeg, audio/flac, audio/ogg, audio/wav, audio/mp4" multiple style="margin:0; padding:10px 14px; background:#222; border:1px solid #333; border-radius:6px; color:white; width:100%;">
                         <button type="submit" class="action-btn" style="background:var(--accent); color:black; padding:10px; font-weight:700;">Upload Tracks</button>
@@ -1674,8 +1699,63 @@ HTML_TEMPLATE = """
             }).then(() => loadUsersTable());
         }
 
+        function sendFeedback(action) {
+            if(!currentSongObj) return;
+            fetch('/api/feedback', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: action, song: currentSongObj.filename})
+            }).then(res => res.json()).then(data => {
+                if(action === 'like') {
+                    document.getElementById('like-btn').classList.toggle('active');
+                    document.getElementById('dislike-btn').classList.remove('active');
+                    animateButton('like-btn');
+                } else if(action === 'dislike') {
+                    document.getElementById('dislike-btn').classList.toggle('active');
+                    document.getElementById('like-btn').classList.remove('active');
+                    animateButton('dislike-btn');
+                    if(isRadioMode) nextTrack();
+                }
+                refreshStatsUI();
+            });
+        }
+
+        function fetchStatusAndLog(filename) {
+            fetch('/api/status?song=' + encodeURIComponent(filename))
+                .then(res => res.json())
+                .then(data => {
+                    document.getElementById('like-btn').classList.toggle('active', data.liked);
+                    document.getElementById('dislike-btn').classList.toggle('active', data.disliked);
+                });
+
+            fetch('/api/social/status', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({song: filename})
+            });
+
+            fetch('/api/feedback', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'listen', song: filename})
+            }).then(() => refreshStatsUI());
+        }
+
+        function refreshStatsUI() {
+            fetch('/api/data').then(res => res.json()).then(data => {
+                songStats = data.stats;
+                data.songs.forEach(song => {
+                    const el = document.getElementById(`stats-${safeId(song.filename)}`);
+                    if (el) {
+                        let s = songStats[song.filename] || {likes: 0, dislikes: 0};
+                        el.innerHTML = `<span class="stat-like"><i class="fas fa-heart" style="color:var(--accent)"></i> ${s.likes}</span>`;
+                    }
+                });
+            });
+        }
+
+        audio.addEventListener('ended', nextTrack);
     </script>
-{% endif %}
 </body>
 </html>
 """
@@ -1732,74 +1812,88 @@ PUBLIC_PLAYLIST_TEMPLATE = """
 # ---------------------------------------------------------
 # ROUTE HANDLERS
 # ---------------------------------------------------------
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/')
 def index():
     db = load_db()
     users = db.get("users", {})
 
-    if users:
-        has_admin = any(u.get("is_admin", False) for u in users.values())
-        if not has_admin:
-            first_user = list(users.keys())[0]
-            users[first_user]["is_admin"] = True
-            save_db(db)
-
     if not users:
-        if request.method == 'POST':
-            username = request.form['username'].strip()
-            password = generate_password_hash(request.form['password'])
-            db["users"] = {username: {'password': password, 'is_admin': True, 'likes': [], 'dislikes': [], 'play_counts': {}, 'bg_color': '#050505', 'pfp': '', 'friends': [], 'friend_requests': []}}
-            save_db(db)
-            return redirect(url_for('index'))
-        return render_template_string(HTML_TEMPLATE, logged_in=False, setup=True)
+        return redirect(url_for('login'))
 
     if 'user' not in session:
-        if request.method == 'POST':
-            username = request.form['username'].strip()
-            password = request.form['password']
-            if username in users and check_password_hash(users[username]['password'], password):
-                session['user'] = username
-                session['is_admin'] = users[username].get('is_admin', False)
-                return redirect(url_for('index'))
-        return render_template_string(HTML_TEMPLATE, logged_in=False, setup=False)
+        return redirect(url_for('login'))
 
     current_user_data = users.get(session['user'], {})
     is_admin = current_user_data.get('is_admin', False)
     user_pfp = current_user_data.get('pfp', '')
     user_bg = current_user_data.get('bg_color', '#050505')
-    session['is_admin'] = is_admin
 
-    return render_template_string(HTML_TEMPLATE, logged_in=True, is_admin=is_admin, user_pfp=user_pfp, user_bg=user_bg)
+    return render_template_string(HTML_TEMPLATE, is_admin=is_admin, user_pfp=user_pfp, user_bg=user_bg)
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    db = load_db()
+    users = db.get("users", {})
+    setup = not bool(users)
+    error = None
+
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+
+        if setup:
+            db["users"] = {username: {'password': generate_password_hash(password), 'is_admin': True, 'likes': [], 'dislikes': [], 'play_counts': {}, 'bg_color': '#050505', 'pfp': '', 'friends': [], 'friend_requests': []}}
+            save_db(db)
+            session['user'] = username
+            session['is_admin'] = True
+            return redirect(url_for('index'))
+        else:
+            if username in users and check_password_hash(users[username]['password'], password):
+                session['user'] = username
+                session['is_admin'] = users[username].get('is_admin', False)
+                return redirect(url_for('index'))
+            else:
+                error = "Invalid username or password."
+
+    return render_template_string(LOGIN_TEMPLATE, setup=setup, error=error)
 
 @app.route('/logout')
 def logout():
     session.clear()
-    return redirect(url_for('index'))
+    return redirect(url_for('login'))
 
 @app.route('/play/<path:filename>')
 def play(filename):
     if 'user' not in session: return "Unauthorized", 401
-    return send_from_directory(MUSIC_DIR, filename)
+    full_path = resolve_audio_path(filename)
+    if not os.path.exists(full_path):
+        return "Audio file not found", 404
+    dir_name = os.path.dirname(full_path)
+    base_name = os.path.basename(full_path)
+    return send_from_directory(dir_name, base_name)
 
 @app.route('/download/<path:filename>')
 def download(filename):
     if 'user' not in session: return "Unauthorized", 401
-    return send_from_directory(MUSIC_DIR, filename, as_attachment=True)
+    full_path = resolve_audio_path(filename)
+    if not os.path.exists(full_path):
+        return "Audio file not found", 404
+    dir_name = os.path.dirname(full_path)
+    base_name = os.path.basename(full_path)
+    return send_from_directory(dir_name, base_name, as_attachment=True)
 
 @app.route('/api/data')
 def api_data():
-    if 'user' not in session: return jsonify([])
+    if 'user' not in session: return jsonify({"songs": [], "stats": {}}), 401
     songs = get_all_songs_enriched()
     stats = get_aggregated_stats()
     return jsonify({"songs": songs, "stats": stats})
 
 @app.route('/api/radio/next')
 def api_radio():
-    if 'user' not in session: return jsonify({})
-
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
     history_param = request.args.get('history', '')
     history_list = [urllib.parse.unquote(x) for x in history_param.split(',')] if history_param else []
-
     next_song_obj = get_radio_recommendation(session['user'], history_list)
     return jsonify({"song": next_song_obj})
 
@@ -1829,6 +1923,7 @@ def api_playlists():
 
 @app.route('/api/playlist/<token>', methods=['GET', 'DELETE'])
 def api_playlist_detail(token):
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
     db = load_db()
     playlists = db.get('playlists', {})
     if token not in playlists: return jsonify({"error": "Playlist not found"}), 404
@@ -1837,7 +1932,7 @@ def api_playlist_detail(token):
         return jsonify(playlists[token])
 
     elif request.method == 'DELETE':
-        if 'user' not in session or playlists[token]['creator'] != session['user']:
+        if playlists[token]['creator'] != session['user'] and not session.get('is_admin'):
             return jsonify({"error": "Unauthorized"}), 403
         del playlists[token]
         save_db(db)
@@ -1873,7 +1968,7 @@ def public_playlist_view(token):
     if token not in playlists: return "Playlist not found", 404
 
     pl = playlists[token]
-    songs = [get_song_metadata(f) for f in pl['songs'] if os.path.exists(os.path.join(MUSIC_DIR, f))]
+    songs = [get_song_metadata(f) for f in pl['songs'] if os.path.exists(resolve_audio_path(f))]
     return render_template_string(PUBLIC_PLAYLIST_TEMPLATE, playlist=pl, songs=songs)
 
 # --- SOCIAL & MESSAGING API ROUTES ---
@@ -1980,7 +2075,7 @@ def api_messages(friend):
 
 @app.route('/api/status')
 def api_status():
-    if 'user' not in session: return jsonify({})
+    if 'user' not in session: return jsonify({"liked": False, "disliked": False})
     song = request.args.get('song')
     db = load_db()
     user = db["users"].get(session['user'], {})
@@ -1991,7 +2086,7 @@ def api_status():
 
 @app.route('/api/feedback', methods=['POST'])
 def api_feedback():
-    if 'user' not in session: return jsonify({"status": "error"})
+    if 'user' not in session: return jsonify({"success": False}), 401
     data = request.json
     action, song = data.get('action'), data.get('song')
     db = load_db()
@@ -2168,7 +2263,7 @@ def admin_users_api():
 @app.route('/api/cover')
 def api_cover():
     filename = request.args.get('file', '')
-    filepath = os.path.join(MUSIC_DIR, filename)
+    filepath = resolve_audio_path(filename)
 
     if os.path.exists(filepath):
         try:
