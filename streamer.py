@@ -10,7 +10,6 @@ import time
 import urllib.request
 import urllib.parse
 import atexit
-import shutil
 from flask import Flask, request, session, redirect, url_for, render_template_string, jsonify, send_from_directory, Response, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -25,35 +24,26 @@ except ImportError:
     sys.exit(1)
 
 PORT = int(os.environ.get("PORT", 8000))
+
+# Your music files will be read directly from your GitHub repo
 MUSIC_DIR = os.environ.get("MUSIC_DIR", "./Music")
+os.makedirs(MUSIC_DIR, exist_ok=True)
 
-# --- VERCEL SERVERLESS CONFIGURATION ---
-IS_VERCEL = os.environ.get("VERCEL") == "1"
+# DATA_DIR points to our persistent Railway Volume (if deployed)
+DATA_DIR = os.environ.get("DATA_DIR", ".")
 
-if IS_VERCEL:
-    CACHE_DIR = "/tmp/Cache_Art"
-    PROFILES_DIR = "/tmp/Profiles"
-    DB_FILE = "/tmp/database.json"
-    METADATA_FILE = "/tmp/metadata_v7.json"
-    VIDEO_CACHE_FILE = "/tmp/videos_v2.json"
-    
-    # Safely copy bundled databases to writable /tmp on cold boot
-    for f in ['database.json', 'metadata_v7.json', 'videos_v2.json']:
-        if os.path.exists(f) and not os.path.exists(f"/tmp/{f}"):
-            try: shutil.copy(f, f"/tmp/{f}")
-            except: pass
-else:
-    os.makedirs(MUSIC_DIR, exist_ok=True)
-    CACHE_DIR = "./Cache_Art"
-    PROFILES_DIR = os.environ.get("PROFILES_DIR", "./Profiles")
-    DB_FILE = 'database.json'
-    METADATA_FILE = 'metadata_v7.json'
-    VIDEO_CACHE_FILE = 'videos_v2.json'
+# Save databases, profiles, and caches to the persistent volume
+CACHE_DIR = os.path.join(DATA_DIR, "Cache_Art")
+PROFILES_DIR = os.path.join(DATA_DIR, "Profiles")
+DB_FILE = os.path.join(DATA_DIR, 'database.json')
+METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v7.json')
+VIDEO_CACHE_FILE = os.path.join(DATA_DIR, 'videos_v2.json')
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(PROFILES_DIR, exist_ok=True)
 
 app = Flask(__name__)
+# Use a persistent random key if not set
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(32).hex())
 
 # ---------------------------------------------------------
@@ -278,7 +268,6 @@ def search_youtube_video(artist, song):
     cache_key = f"{artist} | {song}"
     if cache_key in video_cache: return video_cache[cache_key]
 
-    # Searching for "audio" or "topic" ensures a 1:1 sync with the MP3 (no music video intros)
     queries = [
         f"{artist} {song} audio",
         f"{artist} - {song} (Official Audio)",
@@ -334,6 +323,7 @@ HTML_TEMPLATE = """
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .fade-in { animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         
+        /* Right Panel Layout */
         .right-panel { width: 340px; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; padding: 24px; display: none; flex-direction: column; text-align: center; overflow: hidden; transition: 0.3s; flex-shrink: 0; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
         .rp-header-row { display: flex; justify-content: space-between; width: 100%; align-items: center; margin-bottom: 16px;}
         .rp-tabs { display: flex; gap: 8px; background: #1a1a1a; padding: 4px; border-radius: 20px; }
@@ -426,6 +416,7 @@ HTML_TEMPLATE = """
         .playlist-select-item { padding: 12px 16px; background: #222; border-radius: 6px; margin-bottom: 8px; cursor: pointer; font-weight: 600; text-align: left; display: flex; justify-content: space-between; align-items: center; transition: 0.2s; }
         .playlist-select-item:hover { background: #2a2a2a; border-color: var(--accent); color: var(--accent); }
         
+        /* Social / Chat Styles */
         .social-container { display: flex; height: calc(100vh - 120px); gap: 20px; }
         .social-sidebar { width: 300px; background: #181818; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #282828; }
         .social-sidebar-header { padding: 16px; border-bottom: 1px solid #282828; }
@@ -901,7 +892,6 @@ HTML_TEMPLATE = """
             updateSliderFill(progressBar);
             timeCurrentEl.innerText = formatTime(audio.currentTime);
 
-            // Sync Youtube Video
             if (ytPlayer && typeof ytPlayer.getCurrentTime === 'function' && typeof ytPlayer.getPlayerState === 'function' && ytPlayer.getPlayerState() === YT.PlayerState.PLAYING) {
                 let ytTime = ytPlayer.getCurrentTime();
                 if (Math.abs(ytTime - audio.currentTime) > 2.0) {
@@ -909,7 +899,6 @@ HTML_TEMPLATE = """
                 }
             }
 
-            // Sync Lyrics
             if (syncedLyrics.length > 0) {
                 let newIndex = syncedLyrics.findIndex(l => l.time > audio.currentTime) - 1;
                 if (newIndex < 0) newIndex = 0;
@@ -1867,6 +1856,7 @@ def api_friends():
         if f in db["users"]:
             f_data = db["users"][f]
             np = f_data.get('now_playing')
+            # Clear now_playing if older than 2 hours to prevent stale statuses
             if np and (int(time.time()) - np.get('time', 0)) > 7200:
                 np = None
             friends_payload.append({
@@ -2143,7 +2133,6 @@ def api_cover():
         except Exception:
             pass
             
-        # Try local folder images
         song_dir = os.path.dirname(filepath)
         song_clean = os.path.splitext(os.path.basename(filename))[0].lower()
         valid_exts = ('.jpg', '.jpeg', '.png', '.webp')
@@ -2179,4 +2168,4 @@ def serve_profiles(filename):
 
 if __name__ == '__main__':
     print(f"🎵 App running on port {PORT}! Open http://localhost:{PORT}")
-    app.run(host='0.0.0.0', port=PORT) 
+    app.run(host='0.0.0.0', port=PORT)
