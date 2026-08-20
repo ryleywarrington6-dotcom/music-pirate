@@ -4,13 +4,17 @@ import json
 import random
 import re
 import uuid
+import hashlib
 import urllib.request
 import urllib.parse
+import atexit
 from flask import Flask, request, session, redirect, url_for, render_template_string, jsonify, send_from_directory, Response
 from werkzeug.security import generate_password_hash, check_password_hash
 
 try:
-    import mutagen 
+    import mutagen
+    from mutagen.flac import FLAC
+    from mutagen.mp3 import MP3
 except ImportError:
     print("\n❌ ERROR: Required library 'mutagen' is not installed!")
     print("Run this command in your terminal to fix it:\n")
@@ -19,58 +23,81 @@ except ImportError:
 
 PORT = int(os.environ.get("PORT", 8000))
 MUSIC_DIR = os.environ.get("MUSIC_DIR", "./Music")
-os.makedirs(MUSIC_DIR, exist_ok=True) 
+os.makedirs(MUSIC_DIR, exist_ok=True)
 
 DB_FILE = 'database.json'
-COVERS_FILE = 'covers_v7.json' 
-METADATA_FILE = 'metadata_v5.json'
-VIDEO_CACHE_FILE = 'videos_v1.json' 
+METADATA_FILE = 'metadata_v7.json'
+VIDEO_CACHE_FILE = 'videos_v2.json'
 
 app = Flask(__name__)
-app.secret_key = 'super-secret-production-key-change-me'
+# Use a persistent random key if not set
+app.secret_key = os.environ.get('SECRET_KEY', os.urandom(32).hex())
 
 # ---------------------------------------------------------
 # DATABASE & CACHE HELPERS
 # ---------------------------------------------------------
 def load_json_file(filepath, default_data):
-    if not os.path.exists(filepath): return default_data
+    if not os.path.exists(filepath):
+        return default_data
     try:
-        with open(filepath, 'r') as f: return json.load(f)
-    except Exception: return default_data
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return default_data
 
 def save_json_file(filepath, data):
-    with open(filepath, 'w') as f: json.dump(data, f, indent=2)
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
 
-def load_db(): return load_json_file(DB_FILE, {"users": {}, "playlists": {}})
-def save_db(db): save_json_file(DB_FILE, db)
+def load_db():
+    return load_json_file(DB_FILE, {"users": {}, "playlists": {}})
 
-cover_cache = load_json_file(COVERS_FILE, {})
+def save_db(db):
+    save_json_file(DB_FILE, db)
+
 meta_cache = load_json_file(METADATA_FILE, {})
 video_cache = load_json_file(VIDEO_CACHE_FILE, {})
+_meta_cache_dirty = False
+
+def _save_meta_cache():
+    global _meta_cache_dirty
+    if _meta_cache_dirty:
+        save_json_file(METADATA_FILE, meta_cache)
+        _meta_cache_dirty = False
+
+atexit.register(_save_meta_cache)
 
 def get_all_filepaths():
     audio_files = []
     for root, dirs, files in os.walk(MUSIC_DIR):
         for file in files:
-            if file.lower().endswith(('.mp3', '.flac')):
+            if file.lower().endswith(('.mp3', '.flac', '.ogg', '.m4a', '.wav')):
                 full_path = os.path.join(root, file)
                 rel_path = os.path.relpath(full_path, MUSIC_DIR)
+                # Normalize separators for consistency
+                rel_path = rel_path.replace(os.sep, '/')
                 audio_files.append(rel_path)
     return sorted(audio_files)
 
 def has_embedded_art(filepath):
     try:
         audio = mutagen.File(filepath)
-        if audio is None: return False
+        if audio is None:
+            return False
+        # MP3 / ID3
         if hasattr(audio, 'tags') and audio.tags:
             for key in audio.tags.keys():
-                if key.startswith('APIC'): return True
-        if hasattr(audio, 'pictures') and audio.pictures: return True
-    except: pass
+                if key.startswith('APIC'):
+                    return True
+        # FLAC / Ogg Vorbis
+        if hasattr(audio, 'pictures') and audio.pictures:
+            return True
+    except Exception:
+        pass
     return False
 
 def parse_folder_and_filename(rel_path):
-    parts = rel_path.split(os.sep)
+    parts = rel_path.split('/')
     if len(parts) > 1:
         folder_artist = parts[0]
         filename = parts[-1]
@@ -79,16 +106,17 @@ def parse_folder_and_filename(rel_path):
         filename = parts[0]
 
     base = os.path.splitext(filename)[0]
-    base = re.sub(r'^\s*\d{1,3}[\s.-]+', '', base) 
-    
+    base = re.sub(r'^\s*\d{1,3}[\s.-]+', '', base)
+
     file_parts = re.split(r'\s*[-–—]\s*', base, maxsplit=1)
     if len(file_parts) >= 2:
         return folder_artist if folder_artist != "Unknown Artist" else file_parts[0].strip(), file_parts[1].strip()
-    
+
     return folder_artist, base.strip()
 
 def normalize_artist(raw_artist):
-    if not raw_artist: return "Unknown Artist"
+    if not raw_artist:
+        return "Unknown Artist"
     cleaned = re.split(r'\s*(?:;|feat\.?|ft\.?|&|with|,|/)\s*', raw_artist, flags=re.IGNORECASE)[0]
     return cleaned.strip() or "Unknown Artist"
 
@@ -97,10 +125,22 @@ def extract_audio_tags(full_path, rel_path):
     try:
         audio = mutagen.File(full_path)
         if audio is not None:
-            if 'TPE1' in audio: artist = str(audio['TPE1'])
-            elif 'TPE2' in audio: artist = str(audio['TPE2'])
-            if 'TIT2' in audio: title = str(audio['TIT2'])
+            # ID3 (MP3)
+            if hasattr(audio, 'tags') and audio.tags:
+                if 'TPE1' in audio.tags:
+                    artist = str(audio.tags['TPE1'])
+                elif 'TPE2' in audio.tags:
+                    artist = str(audio.tags['TPE2'])
+                if 'TIT2' in audio.tags:
+                    title = str(audio.tags['TIT2'])
 
+            # Vorbis comments (FLAC, OGG)
+            if not artist and hasattr(audio, 'get'):
+                artist = audio.get('artist', [None])[0] or audio.get('albumartist', [None])[0]
+            if not title and hasattr(audio, 'get'):
+                title = audio.get('title', [None])[0]
+
+            # Generic fallback
             if not artist:
                 if 'artist' in audio:
                     val = audio['artist']
@@ -113,7 +153,8 @@ def extract_audio_tags(full_path, rel_path):
                 if 'title' in audio:
                     val = audio['title']
                     title = val[0] if isinstance(val, list) else str(val)
-    except Exception: pass
+    except Exception:
+        pass
 
     folder_artist, fallback_title = parse_folder_and_filename(rel_path)
     artist = artist or folder_artist
@@ -131,9 +172,9 @@ def get_song_metadata(rel_path):
     if rel_path in meta_cache:
         if meta_cache[rel_path].get('mtime') == mtime:
             return meta_cache[rel_path]
-        
+
     artist, title = extract_audio_tags(full_path, rel_path)
-    
+
     meta_cache[rel_path] = {
         "filename": rel_path,
         "artist": artist,
@@ -141,51 +182,13 @@ def get_song_metadata(rel_path):
         "has_cover": has_embedded_art(full_path),
         "mtime": mtime
     }
-    save_json_file(METADATA_FILE, meta_cache)
+    global _meta_cache_dirty
+    _meta_cache_dirty = True
     return meta_cache[rel_path]
 
 def get_all_songs_enriched():
     files = get_all_filepaths()
     return [get_song_metadata(f) for f in files]
-
-# ---------------------------------------------------------
-# EXTERNAL COVER ART FETCHERS
-# ---------------------------------------------------------
-def fetch_itunes_cover(artist, song):
-    query = f"{artist} {song}".strip() if artist != "Unknown Artist" else song.strip()
-    try:
-        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(query)}&media=music&entity=song&limit=5"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
-            data = json.loads(resp.read().decode())
-            if data.get('resultCount', 0) > 0:
-                for res in data['results']:
-                    api_artist = res.get('artistName', '').lower()
-                    if artist != "Unknown Artist" and (artist.lower() in api_artist or api_artist in artist.lower()):
-                        return res['artworkUrl100'].replace('100x100bb', '500x500bb')
-                return data['results'][0]['artworkUrl100'].replace('100x100bb', '500x500bb')
-    except Exception: pass
-    return None
-
-def fetch_musicbrainz_cover(artist, song):
-    try:
-        q = f'artist:"{artist}" AND recording:"{song}"' if artist != "Unknown Artist" else f'recording:"{song}"'
-        url = f"https://musicbrainz.org/ws/2/recording/?query={urllib.parse.quote(q)}&fmt=json&limit=1"
-        req = urllib.request.Request(url, headers={'User-Agent': 'StreamerApp/1.0'})
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
-            data = json.loads(resp.read().decode())
-            if data.get('recordings'):
-                for release in data['recordings'][0].get('releases', []):
-                    release_id = release.get('id')
-                    if release_id:
-                        return f"https://coverartarchive.org/release/{release_id}/front-500"
-    except Exception: pass
-    return None
-
-def generate_svg_fallback(song_name):
-    clean_title = urllib.parse.quote(song_name[:15] if song_name else "Music")
-    svg = f"""data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300' viewBox='0 0 300 300'><rect width='300' height='300' fill='%23121212'/><circle cx='150' cy='150' r='80' fill='%23222222'/><text x='50%' y='48%' fill='%231DB954' font-size='48' font-family='sans-serif' text-anchor='middle' dominant-baseline='middle'>🎵</text><text x='50%' y='80%' fill='%23b3b3b3' font-size='14' font-family='sans-serif' text-anchor='middle'>{clean_title}</text></svg>"""
-    return svg
 
 def get_aggregated_stats():
     files = get_all_filepaths()
@@ -193,11 +196,14 @@ def get_aggregated_stats():
     db = load_db()
     for username, user_data in db.get("users", {}).items():
         for liked_song in user_data.get("likes", []):
-            if liked_song in stats: stats[liked_song]["likes"] += 1
+            if liked_song in stats:
+                stats[liked_song]["likes"] += 1
         for disliked_song in user_data.get("dislikes", []):
-            if disliked_song in stats: stats[disliked_song]["dislikes"] += 1
+            if disliked_song in stats:
+                stats[disliked_song]["dislikes"] += 1
         for song, count in user_data.get("play_counts", {}).items():
-            if song in stats: stats[song]["plays"] += count
+            if song in stats:
+                stats[song]["plays"] += count
     return stats
 
 def get_radio_recommendation(username, history_list=None):
@@ -207,35 +213,115 @@ def get_radio_recommendation(username, history_list=None):
     dislikes = set(user.get("dislikes", []))
     play_counts = user.get("play_counts", {})
     all_files = get_all_filepaths()
-    
+
     history_list = history_list or []
     history_set = set(history_list)
-    
+
     valid_songs = [s for s in all_files if s not in dislikes and s not in history_set]
-    
-    if not valid_songs: 
+    if not valid_songs:
         valid_songs = [s for s in all_files if s not in dislikes]
-    if not valid_songs: 
+    if not valid_songs:
         return get_song_metadata(random.choice(all_files)) if all_files else None
 
     weights = []
     for song in valid_songs:
-        weight = 10.0 
-        
-        if song in likes: 
-            weight += 15.0 
-            
+        weight = 10.0
+        if song in likes:
+            weight += 15.0
         plays = play_counts.get(song, 0)
         if plays == 0:
-            weight += 25.0 
+            weight += 25.0
         else:
             weight = max(2.0, weight - (plays * 1.5))
-            
         weight *= random.uniform(0.8, 1.4)
         weights.append(weight)
-        
+
     recommended_filename = random.choices(valid_songs, weights=weights, k=1)[0]
     return get_song_metadata(recommended_filename)
+
+
+# ---------------------------------------------------------
+# COVER & VIDEO HELPERS
+# ---------------------------------------------------------
+def generate_placeholder_cover(artist, title):
+    """Generate a deterministic colored SVG placeholder with initials."""
+    h = hashlib.md5((artist + title).encode('utf-8')).hexdigest()
+    bg_color = f"#{h[:6]}"
+    # Simple brightness check for text color
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    brightness = (r * 299 + g * 587 + b * 114) / 1000
+    text_color = "#111111" if brightness > 180 else "#ffffff"
+
+    initials = ""
+    for word in (artist + " " + title).split():
+        if word and word[0].isalnum():
+            initials += word[0].upper()
+            if len(initials) >= 2:
+                break
+    if not initials:
+        initials = "♪"
+
+    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 500 500">
+        <rect width="500" height="500" fill="{bg_color}"/>
+        <text x="50%" y="55%" fill="{text_color}" font-size="180" font-family="Segoe UI, Arial, sans-serif"
+              font-weight="700" text-anchor="middle" dominant-baseline="middle" opacity="0.9">{initials}</text>
+    </svg>'''
+    return svg
+
+def search_youtube_video(artist, song):
+    """Robust YouTube search with multiple strategies and ad-filtering."""
+    if not artist or artist == "Unknown Artist":
+        return None
+
+    cache_key = f"{artist} | {song}"
+    if cache_key in video_cache:
+        return video_cache[cache_key]
+
+    # Try progressively broader searches
+    queries = [
+        f"{artist} {song} official music video",
+        f"{artist} {song}",
+        f"{artist} - {song}",
+        f"{artist} topic {song}"
+    ]
+
+    for query in queries:
+        url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
+        try:
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
+            })
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                html = resp.read().decode('utf-8')
+
+                # Strategy 1: Look for actual videoRenderer objects (avoids ads/shelves)
+                matches = re.findall(r'"videoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})"', html)
+                if matches:
+                    vid = matches[0]
+                    video_cache[cache_key] = vid
+                    save_json_file(VIDEO_CACHE_FILE, video_cache)
+                    return vid
+
+                # Strategy 2: General videoId fallback, skip first 2 matches (often ads/promos)
+                matches = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+                if len(matches) > 2:
+                    vid = matches[2]
+                    video_cache[cache_key] = vid
+                    save_json_file(VIDEO_CACHE_FILE, video_cache)
+                    return vid
+                elif matches:
+                    vid = matches[0]
+                    video_cache[cache_key] = vid
+                    save_json_file(VIDEO_CACHE_FILE, video_cache)
+                    return vid
+        except Exception:
+            continue
+
+    video_cache[cache_key] = None
+    save_json_file(VIDEO_CACHE_FILE, video_cache)
+    return None
+
 
 # ---------------------------------------------------------
 # HIGH-END HTML & UI TEMPLATE
@@ -251,48 +337,30 @@ HTML_TEMPLATE = """
     <style>
         :root { --bg: #050505; --panel: #121212; --highlight: #222222; --text: #ffffff; --subtext: #a7a7a7; --accent: #1DB954; --card-bg: #181818; }
         * { box-sizing: border-box; }
-        
         body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: radial-gradient(circle at top left, #1a1a1a 0%, var(--bg) 100%); color: var(--text); margin: 0; overflow: hidden; display: flex; height: 100vh; }
-        
-        /* Sidebar Navigation */
         .sidebar { width: 240px; background: transparent; padding: 24px 16px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; z-index: 10; }
         .logo { font-size: 20px; font-weight: 800; padding: 0 12px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; letter-spacing: 0.5px; }
         .nav-section-title { font-size: 11px; text-transform: uppercase; color: var(--subtext); letter-spacing: 1.2px; padding: 12px 12px 4px 12px; font-weight: 700; }
         .nav-item { padding: 10px 12px; border-radius: 6px; cursor: pointer; color: var(--subtext); font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 15px; transition: all 0.2s ease; }
         .nav-item:hover, .nav-item.active { color: var(--text); background: var(--highlight); }
         .nav-item i { font-size: 18px; width: 20px; text-align: center; }
-        
-        /* Main Layout */
         .center-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; position: relative; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
         .top-bar { height: 64px; background: rgba(18,18,18,0.7); backdrop-filter: blur(20px); display: flex; align-items: center; justify-content: space-between; padding: 0 32px; position: absolute; top: 0; left: 0; right: 0; z-index: 50; border-radius: 12px 12px 0 0; }
         .main-content { flex: 1; padding: 84px 32px 32px 32px; overflow-y: auto; scroll-behavior: smooth; }
-        
-        /* Animations */
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .fade-in { animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-        
-        /* Right Sidebar Panel */
         .right-panel { width: 340px; background: var(--panel); border-radius: 12px; margin: 8px 8px 96px 0; padding: 24px; display: none; flex-direction: column; align-items: center; text-align: center; overflow: hidden; transition: 0.3s; flex-shrink: 0; box-shadow: -5px 0 25px rgba(0,0,0,0.5); }
-        
-        /* Cover Art & Music Video Canvas Glow */
         .rp-media-container { position: relative; width: 220px; height: 220px; margin: 15px 0 25px 0; }
         .rp-cover-glow { position: absolute; top: 10%; left: 10%; width: 80%; height: 80%; filter: blur(35px); opacity: 0.65; z-index: 1; transition: background-image 0.5s ease; background-size: cover; background-position: center; border-radius: 50%; }
         #rp-cover { position: absolute; z-index: 2; top:0; left:0; width: 100%; height: 100%; border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.7); object-fit: cover; transition: opacity 0.5s ease; }
         #rp-video-container { position: absolute; top:0; left:0; width:100%; height:100%; border-radius: 8px; overflow: hidden; z-index: 3; opacity: 0; transition: opacity 0.5s; pointer-events: none; box-shadow: 0 12px 30px rgba(0,0,0,0.7); }
         #rp-video { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 600px; height: 337px; }
-
-        /* High-Res Visualizer Canvas */
         #visualizer { width: 100%; height: 50px; display: block; filter: drop-shadow(0px 0px 8px rgba(29, 185, 84, 0.5)); margin-top: 5px; }
-
-        /* Player Bar */
         .player-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 88px; background: #000; border-top: 1px solid #222; display: flex; align-items: center; padding: 0 24px; justify-content: space-between; z-index: 1000; }
-        
-        /* Search & Dropdown */
         .search-container { display: flex; align-items: center; background: #242424; border-radius: 24px; padding: 8px 16px; width: 320px; border: 1px solid transparent; transition: 0.2s; }
         .search-container:focus-within { border-color: #555; background: #2a2a2a; }
         .search-container i { color: var(--subtext); font-size: 14px; margin-right: 10px; }
         .search-container input { background: transparent; border: none; color: white; width: 100%; outline: none; font-size: 14px; }
-        
         .user-badge-wrapper { position: relative; display: inline-block; }
         .user-badge { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; background: #1a1a1a; padding: 6px 14px; border-radius: 20px; border: 1px solid #333; cursor: pointer; transition: 0.2s; }
         .user-badge:hover { background: #2a2a2a; border-color: #555; }
@@ -301,65 +369,49 @@ HTML_TEMPLATE = """
         .dropdown-item { padding: 12px 16px; font-size: 13px; font-weight: 600; color: var(--subtext); display: flex; align-items: center; gap: 12px; cursor: pointer; text-decoration: none; transition: 0.2s; }
         .dropdown-item:hover { background: #333; color: var(--text); }
         .dropdown-divider { height: 1px; background: #3d3d3d; margin: 4px 0; }
-
         h2 { font-size: 26px; font-weight: 700; margin-top: 0; margin-bottom: 24px; letter-spacing: -0.5px; }
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 20px; margin-bottom: 40px; }
         .scroll-row { display: flex; gap: 20px; overflow-x: auto; padding-bottom: 16px; margin-bottom: 36px; scroll-snap-type: x mandatory; }
         .scroll-row .card { min-width: 180px; flex-shrink: 0; scroll-snap-align: start; }
-        
-        /* Cards & Overlay */
         .card { background: var(--card-bg); padding: 14px; border-radius: 8px; cursor: pointer; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); position: relative; text-align: left; }
         .card:hover { background: #252525; transform: translateY(-6px); box-shadow: 0 12px 30px rgba(0,0,0,0.6); }
         .card-img-container { width: 100%; aspect-ratio: 1; background: #222; border-radius: 6px; margin-bottom: 12px; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 36px; color: #444; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
         .card-img-container img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; }
-        
         .card-play-overlay { position: absolute; bottom: 10px; right: 10px; background: var(--accent); color: #000; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; opacity: 0; transform: translateY(10px); transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 8px 15px rgba(0,0,0,0.5); z-index: 2;}
         .card:hover .card-play-overlay { opacity: 1; transform: translateY(0); }
         .card-play-overlay:hover { transform: scale(1.1) !important; background: #1ed760; }
-
         .card-info { display: flex; flex-direction: column; gap: 4px; }
         .card-title { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .card-bottom-row { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
         .card-artist { font-weight: 500; color: var(--subtext); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; padding-right: 8px; }
         .card-stats { display: flex; gap: 8px; font-size: 11px; color: var(--subtext); }
-        
-        /* Bottom Player Controls */
         .now-playing-info { width: 28%; display: flex; align-items: center; gap: 14px; }
         .np-cover { width: 56px; height: 56px; background: #222; border-radius: 6px; object-fit: cover; box-shadow: 0 4px 12px rgba(0,0,0,0.5); cursor: pointer;}
         .np-text { display: flex; flex-direction: column; overflow: hidden; }
         .np-title { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .np-artist { color: var(--subtext); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
-        
         .controls { width: 44%; display: flex; flex-direction: column; align-items: center; gap: 6px; }
         .buttons { display: flex; gap: 20px; align-items: center; }
         .volume-controls { display: flex; align-items: center; gap: 12px; width: 28%; justify-content: flex-end; color: var(--subtext); }
-        
         @keyframes pop { 0% { transform: scale(1); } 50% { transform: scale(1.35); } 100% { transform: scale(1); } }
         .pop-anim { animation: pop 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-        
         .btn { background: none; border: none; color: var(--subtext); font-size: 16px; cursor: pointer; transition: color 0.2s; outline: none; }
         .btn:hover { color: var(--text); }
         .btn.active#like-btn i, .btn.active.shuffle i, .btn.active.repeat i { color: var(--accent) !important; }
-        .btn.active#dislike-btn i { color: #ff5555 !important; } 
+        .btn.active#dislike-btn i { color: #ff5555 !important; }
         .btn.play-btn { background: var(--text); color: var(--bg); height: 34px; width: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: transform 0.2s; }
         .btn.play-btn:hover { transform: scale(1.08); color: var(--bg); }
         audio { display: none; }
-        
         input[type=range] { -webkit-appearance: none; background: #4d4d4d; height: 4px; border-radius: 2px; outline: none; cursor: pointer; width: 100%; transition: 0.1s; }
         input[type=range]:hover { height: 6px; }
         input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #fff; opacity: 0; transition: 0.1s; box-shadow: 0 2px 4px rgba(0,0,0,0.5); }
         input[type=range]:hover::-webkit-slider-thumb { opacity: 1; }
-        
-        /* IMPROVED LYRICS UI */
         .lyrics-container { position: relative; width: 100%; flex: 1; overflow-y: auto; text-align: left; padding-top: 20px; padding-bottom: 80px; scroll-behavior: smooth; mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%); }
         .lyric-line { font-size: 17px; color: rgba(255, 255, 255, 0.35); padding: 8px 12px; margin: 4px 0; border-radius: 6px; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); font-weight: 600; cursor: pointer; transform-origin: left center; }
         .lyric-line:hover { color: rgba(255, 255, 255, 0.8); background: rgba(255,255,255,0.03); }
-        
         .lyric-line.active { color: var(--accent); font-size: 21px; font-weight: 700; text-shadow: 0 0 15px rgba(29, 185, 84, 0.4); transform: translateX(4px); opacity: 1; }
-        
         .lyric-word { transition: all 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275); display: inline-block; }
         .lyric-word.active-word { color: #ff9500 !important; text-shadow: 0 0 18px rgba(255, 149, 0, 0.9) !important; transform: scale(1.15) translateY(-2px); }
-        
         .admin-card { background: #181818; border: 1px solid #282828; border-radius: 10px; padding: 24px; margin-bottom: 24px; max-width: 700px; }
         .admin-table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14px; text-align: left; }
         .admin-table th, .admin-table td { padding: 12px 14px; border-bottom: 1px solid #222; }
@@ -370,12 +422,15 @@ HTML_TEMPLATE = """
         .action-btn:hover { background: #383838; }
         .action-btn.danger { background: rgba(255,85,85,0.15); color: #ff5555; }
         .action-btn.danger:hover { background: rgba(255,85,85,0.3); }
-
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 2000; align-items: center; justify-content: center; backdrop-filter: blur(5px); }
+        .modal-card { background: #181818; border: 1px solid #333; padding: 30px; border-radius: 12px; width: 380px; box-shadow: 0 20px 40px rgba(0,0,0,0.8); text-align: center; }
+        .modal-card h3 { margin-top: 0; margin-bottom: 20px; }
+        .playlist-select-item { padding: 12px 16px; background: #222; border-radius: 6px; margin-bottom: 8px; cursor: pointer; font-weight: 600; text-align: left; display: flex; justify-content: space-between; align-items: center; transition: 0.2s; }
+        .playlist-select-item:hover { background: #2a2a2a; border-color: var(--accent); color: var(--accent); }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
-        
         .auth-container { width: 100%; height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
         .auth-card { background: var(--panel); padding: 40px; border-radius: 12px; text-align: center; width: 340px; border: 1px solid #222; box-shadow: 0 15px 35px rgba(0,0,0,0.8); }
         .auth-card h2 { margin-bottom: 20px; font-size: 24px; }
@@ -383,6 +438,13 @@ HTML_TEMPLATE = """
         input[type=text]:focus, input[type=password]:focus { border-color: var(--accent); }
         button.primary { background: var(--accent); color: black; border: none; padding: 12px 24px; border-radius: 24px; font-weight: 700; cursor: pointer; margin-top: 10px; width: 100%; font-size: 15px; transition: 0.2s; }
         button.primary:hover { transform: scale(1.02); background: #1ed760; }
+        .eq-container { display: flex; align-items: flex-end; gap: 3px; height: 16px; }
+        .eq-bar { width: 3px; background: var(--accent); border-radius: 1px; animation: eqbounce 1s infinite ease-in-out; }
+        .eq-bar:nth-child(1) { height: 40%; animation-delay: 0s; }
+        .eq-bar:nth-child(2) { height: 70%; animation-delay: 0.2s; }
+        .eq-bar:nth-child(3) { height: 50%; animation-delay: 0.4s; }
+        .eq-container.paused .eq-bar { animation-play-state: paused; height: 20% !important; transition: height 0.3s ease; }
+        @keyframes eqbounce { 0%, 100% { transform: scaleY(0.6); } 50% { transform: scaleY(1.0); } }
     </style>
 </head>
 <body>
@@ -401,6 +463,14 @@ HTML_TEMPLATE = """
         </div>
     </div>
 {% else %}
+    <div class="modal-overlay" id="playlist-modal" onclick="if(event.target === this) closePlaylistModal()">
+        <div class="modal-card">
+            <h3>Add to Playlist</h3>
+            <div id="playlist-modal-list" style="max-height: 220px; overflow-y: auto; margin-bottom: 16px;"></div>
+            <button class="action-btn" style="width:100%; padding:10px; background:#333;" onclick="closePlaylistModal()">Cancel</button>
+        </div>
+    </div>
+
     <div class="sidebar">
         <div class="logo"><i class="fab fa-spotify" style="color:var(--accent)"></i> Streamer Pro</div>
         
@@ -438,7 +508,6 @@ HTML_TEMPLATE = """
         <div class="main-content" id="main-content"></div>
     </div>
 
-    <!-- RIGHT PANEL -->
     <div class="right-panel" id="right-panel">
         <div style="display:flex; justify-content:space-between; width:100%; align-items:center;">
             <h3 style="margin:0; color: var(--subtext); font-size: 12px; letter-spacing: 1px;"><i class="fas fa-compact-disc"></i> NOW PLAYING</h3>
@@ -453,7 +522,7 @@ HTML_TEMPLATE = """
             <div class="rp-cover-glow" id="rp-cover-glow"></div>
             <img id="rp-cover" src="" alt="">
             <div id="rp-video-container">
-                <iframe id="rp-video" src="" frameborder="0" allow="autoplay; encrypted-media" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+                <div id="rp-video"></div>
             </div>
         </div>
 
@@ -467,10 +536,9 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- BOTTOM PLAYER BAR -->
     <div class="player-bar">
         <div class="now-playing-info">
-            <img id="np-cover" class="np-cover" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" alt="Cover" onclick="document.querySelector('.right-panel').style.display='flex'">
+            <img id="np-cover" class="np-cover" src="" alt="Cover" onclick="document.querySelector('.right-panel').style.display='flex'">
             <div class="np-text">
                 <div class="np-title" id="np-title">No track selected</div>
                 <div class="np-artist" id="np-artist">-</div>
@@ -503,7 +571,6 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- YouTube API Script for Video Syncing -->
     <script src="https://www.youtube.com/iframe_api"></script>
 
     <script>
@@ -515,19 +582,19 @@ HTML_TEMPLATE = """
         let currentQueue = [];
         let originalQueue = [];
         let currentIndex = 0;
-        let radioHistory = []; 
+        let radioHistory = [];
         let isRadioMode = false;
         let isShuffle = false;
         let isRepeat = false;
-        let currentSongObj = null; 
+        let currentSongObj = null;
         let syncedLyrics = [];
         let activeLyricIndex = -1;
+        let selectedSongForPlaylist = null;
 
         let ytPlayer = null;
-        let ytReady = false;
-
+        let ytPlayerReady = false;
         function onYouTubeIframeAPIReady() {
-            // Initialized when the YouTube API script loads
+            ytPlayerReady = true;
         }
 
         let audioCtx;
@@ -549,9 +616,28 @@ HTML_TEMPLATE = """
         const timeTotalEl = document.getElementById('time-total');
         const lyricsContainer = document.getElementById('lyrics-container');
 
+        const savedVolume = localStorage.getItem('streamer_pro_volume');
+        if (savedVolume !== null) {
+            volumeBar.value = savedVolume;
+            audio.volume = savedVolume / 100;
+        } else {
+            audio.volume = 1.0;
+        }
+        updateSliderFill(volumeBar);
+
+        volumeBar.addEventListener('input', function() {
+            audio.volume = this.value / 100;
+            updateSliderFill(this);
+            localStorage.setItem('streamer_pro_volume', this.value);
+
+            if (audio.volume === 0) { muteIcon.className = "fas fa-volume-mute"; }
+            else if (audio.volume < 0.5) { muteIcon.className = "fas fa-volume-down"; }
+            else { muteIcon.className = "fas fa-volume-up"; }
+        });
+
         document.addEventListener('keydown', (e) => {
             if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-            
+
             if(e.code === 'Space') { e.preventDefault(); togglePlay(); }
             if(e.code === 'ArrowRight') { e.preventDefault(); nextTrack(); }
             if(e.code === 'ArrowLeft') { e.preventDefault(); prevTrack(); }
@@ -570,21 +656,21 @@ HTML_TEMPLATE = """
         function initVisualizer() {
             if (visualizerInitialized) return;
             visualizerInitialized = true;
-            
+
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             audioCtx = new AudioContext();
             analyser = audioCtx.createAnalyser();
-            
-            analyser.fftSize = 256; 
-            analyser.smoothingTimeConstant = 0.85; 
-            
+
+            analyser.fftSize = 256;
+            analyser.smoothingTimeConstant = 0.85;
+
             source = audioCtx.createMediaElementSource(audio);
             source.connect(analyser);
             analyser.connect(audioCtx.destination);
-            
+
             const bufferLength = analyser.frequencyBinCount;
             const dataArray = new Uint8Array(bufferLength);
-            
+
             function draw() {
                 requestAnimationFrame(draw);
                 if (!audio.paused) {
@@ -594,33 +680,33 @@ HTML_TEMPLATE = """
                         dataArray[i] = Math.max(0, dataArray[i] - 5);
                     }
                 }
-                
+
                 canvasCtx.clearRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
-                
-                const usableBins = Math.floor(bufferLength * 0.75); 
+
+                const usableBins = Math.floor(bufferLength * 0.75);
                 const barWidth = (visualizerCanvas.width / usableBins) / 2;
                 const gap = 2;
-                
+
                 let xRight = visualizerCanvas.width / 2;
                 let xLeft = visualizerCanvas.width / 2;
-                
+
                 for(let i = 0; i < usableBins; i++) {
                     let rawValue = dataArray[i];
                     let percent = rawValue / 255;
-                    let mathVal = Math.pow(percent, 1.5); 
+                    let mathVal = Math.pow(percent, 1.5);
                     let barHeight = mathVal * visualizerCanvas.height;
-                    
+
                     let gradient = canvasCtx.createLinearGradient(0, visualizerCanvas.height, 0, 0);
                     gradient.addColorStop(0, "rgba(29, 185, 84, 0.4)");
                     gradient.addColorStop(1, "rgba(29, 185, 84, 1)");
-                    
+
                     canvasCtx.fillStyle = gradient;
-                    
+
                     canvasCtx.fillRect(xRight, visualizerCanvas.height - barHeight, barWidth - gap, barHeight);
                     if (i > 0) {
                         canvasCtx.fillRect(xLeft - barWidth, visualizerCanvas.height - barHeight, barWidth - gap, barHeight);
                     }
-                    
+
                     xRight += barWidth;
                     xLeft -= barWidth;
                 }
@@ -636,7 +722,7 @@ HTML_TEMPLATE = """
         function toggleSettingsMenu() {
             document.getElementById('settings-dropdown').classList.toggle('show');
         }
-        
+
         window.onclick = function(e) {
             if (!e.target.closest('.user-badge-wrapper')) {
                 document.querySelectorAll(".settings-dropdown").forEach(d => d.classList.remove('show'));
@@ -646,8 +732,7 @@ HTML_TEMPLATE = """
         function safeId(str) { return encodeURIComponent(str).replace(/[^a-zA-Z0-9]/g, ''); }
 
         function getCoverUrl(song) {
-            if(song.has_cover) return `/api/cover/embedded?file=${encodeURIComponent(song.filename)}`;
-            return `/api/cover?artist=${encodeURIComponent(song.artist)}&song=${encodeURIComponent(song.title)}&file=${encodeURIComponent(song.filename)}`;
+            return `/api/cover?file=${encodeURIComponent(song.filename)}`;
         }
 
         function updateMediaSession(songObj, coverUrl) {
@@ -669,25 +754,25 @@ HTML_TEMPLATE = """
         audio.addEventListener('play', () => {
             initVisualizer();
             if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-            
+
             playIcon.classList.remove('fa-play');
             playIcon.classList.add('fa-pause');
             playIcon.style.marginLeft = '0';
             eqAnim.classList.remove('paused');
             eqAnim.classList.add('playing');
-            
-            if (ytPlayer && ytPlayer.playVideo) {
+
+            if (ytPlayer && typeof ytPlayer.playVideo === 'function') {
                 ytPlayer.playVideo();
             }
         });
-        
+
         audio.addEventListener('pause', () => {
             playIcon.classList.remove('fa-pause');
             playIcon.classList.add('fa-play');
             playIcon.style.marginLeft = '2px';
             eqAnim.classList.add('paused');
-            
-            if (ytPlayer && ytPlayer.pauseVideo) {
+
+            if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
                 ytPlayer.pauseVideo();
             }
         });
@@ -702,22 +787,23 @@ HTML_TEMPLATE = """
             progressBar.value = percent;
             updateSliderFill(progressBar);
             timeCurrentEl.innerText = formatTime(audio.currentTime);
-            
-            // Sync YouTube video position if it drifts by more than 1.5 seconds
-            if (ytPlayer && ytPlayer.getCurrentTime && ytPlayer.getPlayerState && ytPlayer.getPlayerState() === YT.PlayerState.PLAYING) {
+
+            // Sync Youtube Video
+            if (ytPlayer && typeof ytPlayer.getCurrentTime === 'function' && typeof ytPlayer.getPlayerState === 'function' && ytPlayer.getPlayerState() === YT.PlayerState.PLAYING) {
                 let ytTime = ytPlayer.getCurrentTime();
                 if (Math.abs(ytTime - audio.currentTime) > 1.5) {
                     ytPlayer.seekTo(audio.currentTime, true);
                 }
             }
-            
+
+            // Sync Lyrics
             if (syncedLyrics.length > 0) {
                 let newIndex = syncedLyrics.findIndex(l => l.time > audio.currentTime) - 1;
                 if (newIndex < 0) newIndex = 0;
                 if (newIndex === syncedLyrics.length - 2 && audio.currentTime >= syncedLyrics[syncedLyrics.length - 1].time) {
                     newIndex = syncedLyrics.length - 1;
                 }
-                
+
                 if (newIndex !== activeLyricIndex && newIndex >= 0) {
                     if (activeLyricIndex >= 0) {
                         const oldEl = document.getElementById(`lyric-${activeLyricIndex}`);
@@ -744,7 +830,7 @@ HTML_TEMPLATE = """
                     if (line.words.length > 0) {
                         const elapsed = audio.currentTime - line.time;
                         let progress = elapsed / line.duration;
-                        
+
                         if (progress < 0) progress = 0;
                         if (progress > 1) progress = 1;
 
@@ -769,21 +855,13 @@ HTML_TEMPLATE = """
         });
 
         progressBar.addEventListener('input', function() {
+            if (!audio.duration) return;
             audio.currentTime = (this.value / 100) * audio.duration;
             updateSliderFill(this);
-            if (ytPlayer && ytPlayer.seekTo) {
+            if (ytPlayer && typeof ytPlayer.seekTo === 'function') {
                 ytPlayer.seekTo(audio.currentTime, true);
             }
         });
-        
-        volumeBar.addEventListener('input', function() {
-            audio.volume = this.value / 100;
-            updateSliderFill(this);
-            if (audio.volume === 0) { muteIcon.className = "fas fa-volume-mute"; } 
-            else if (audio.volume < 0.5) { muteIcon.className = "fas fa-volume-down"; } 
-            else { muteIcon.className = "fas fa-volume-up"; }
-        });
-        updateSliderFill(volumeBar);
 
         function toggleMute() {
             if (audio.volume > 0) {
@@ -797,6 +875,7 @@ HTML_TEMPLATE = """
                 muteIcon.className = "fas fa-volume-up";
             }
             updateSliderFill(volumeBar);
+            localStorage.setItem('streamer_pro_volume', volumeBar.value);
         }
 
         function togglePlay() {
@@ -804,7 +883,7 @@ HTML_TEMPLATE = """
             if (audio.paused) audio.play();
             else audio.pause();
         }
-        
+
         function toggleShuffle() {
             isShuffle = !isShuffle;
             document.getElementById('shuffle-btn').classList.toggle('active', isShuffle);
@@ -824,7 +903,7 @@ HTML_TEMPLATE = """
                 if(currentIndex === -1) currentIndex = 0;
             }
         }
-        
+
         function toggleRepeat() {
             isRepeat = !isRepeat;
             document.getElementById('repeat-btn').classList.toggle('active', isRepeat);
@@ -839,7 +918,7 @@ HTML_TEMPLATE = """
         }
 
         fetch('/api/data').then(res => res.json()).then(data => {
-            allSongs = data.songs; 
+            allSongs = data.songs;
             songStats = data.stats;
             processArtists(allSongs);
             switchView('home');
@@ -864,7 +943,7 @@ HTML_TEMPLATE = """
                 event.currentTarget.classList.add('active');
             }
             document.getElementById('global-search').value = '';
-            
+
             if (view === 'home') renderHome();
             if (view === 'artists') renderArtists();
             if (view === 'playlists') renderPlaylists();
@@ -875,31 +954,44 @@ HTML_TEMPLATE = """
         function handleSearch(query) {
             let q = query.toLowerCase().trim();
             if(!q) { renderHome(); return; }
-            
+
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
             let results = allSongs.filter(s => s.title.toLowerCase().includes(q) || s.artist.toLowerCase().includes(q));
             renderGrid(results, `Search Results for "${query}"`);
         }
 
+        // Global arrays so HTML onclicks don't break string escaping
+        function playQueueByFilenames(filenames, index) {
+            let queue = filenames.map(f => allSongs.find(s => s.filename === f)).filter(Boolean);
+            playQueue(queue, index);
+        }
+
         function buildCardsHTML(songsArray, isRow = false, playlistToken = null) {
             let html = isRow ? `<div class="scroll-row">` : `<div class="grid">`;
+            
+            // Extract just the filenames to pass to playQueue safely
+            let filenameArr = JSON.stringify(songsArray.map(s => s.filename)).replace(/"/g, '&quot;');
+            
             songsArray.forEach((song, i) => {
                 let coverUrl = getCoverUrl(song);
                 let stats = songStats[song.filename] || {likes: 0, dislikes: 0, plays: 0};
-                
+                let cleanTitle = song.title.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
+                let cleanArtist = song.artist.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
+                let cleanFilename = song.filename.replace(/'/g, "\\'");
+
                 html += `
                 <div class="card">
-                    <div class="card-img-container" onclick="playQueue(${JSON.stringify(songsArray).replace(/"/g, '&quot;')}, ${i})">
-                        <img src="${coverUrl}" loading="lazy" onerror="this.style.display='none'">
+                    <div class="card-img-container" onclick="playQueueByFilenames(${filenameArr}, ${i})">
+                        <img src="${coverUrl}" loading="lazy">
                         <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
                     </div>
                     <div class="card-info">
-                        <div class="card-title" title="${song.title}" onclick="playQueue(${JSON.stringify(songsArray).replace(/"/g, '&quot;')}, ${i})">${song.title}</div>
+                        <div class="card-title" title="${cleanTitle}" onclick="playQueueByFilenames(${filenameArr}, ${i})">${cleanTitle}</div>
                         <div class="card-bottom-row">
-                            <div class="card-artist" title="${song.artist}">${song.artist}</div>
+                            <div class="card-artist" title="${cleanArtist}">${cleanArtist}</div>
                             <div>
-                                ${playlistToken ? `<button class="action-btn danger" onclick="removeFromPlaylist('${playlistToken}', '${song.filename}')" title="Remove"><i class="fas fa-times"></i></button>` : ''}
-                                <button class="action-btn" onclick="openAddToPlaylistModal('${song.filename}')" title="Add to Playlist"><i class="fas fa-plus"></i></button>
+                                ${playlistToken ? `<button class="action-btn danger" onclick="removeFromPlaylist('${playlistToken}', '${cleanFilename}')" title="Remove"><i class="fas fa-times"></i></button>` : ''}
+                                <button class="action-btn" onclick="openAddToPlaylistModal('${cleanFilename}')" title="Add to Playlist"><i class="fas fa-plus"></i></button>
                             </div>
                         </div>
                     </div>
@@ -919,7 +1011,7 @@ HTML_TEMPLATE = """
                 let statB = songStats[b.filename] || {likes:0, plays:0};
                 return (statB.likes * 5 + statB.plays) - (statA.likes * 5 + statA.plays);
             }).slice(0, 15);
-            
+
             let newlyAdded = [...allSongs].sort((a, b) => b.mtime - a.mtime).slice(0, 15);
 
             contentDiv.innerHTML = `
@@ -939,11 +1031,12 @@ HTML_TEMPLATE = """
             Object.keys(groupedArtists).forEach(artist => {
                 let sampleSong = groupedArtists[artist][0];
                 let coverUrl = getCoverUrl(sampleSong);
+                let escapedArtist = artist.replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
                 html += `
-                <div class="card" onclick='renderGrid(groupedArtists["${artist.replace(/'/g, "\\'")}"])' style="text-align:center;">
+                <div class="card" onclick="renderGrid(groupedArtists['${escapedArtist}'], '${escapedArtist}')" style="text-align:center;">
                     <div class="card-img-container" style="border-radius: 50%;">
-                        <img src="${coverUrl}" loading="lazy" style="border-radius: 50%;" onerror="this.style.display='none'">
+                        <img src="${coverUrl}" loading="lazy" style="border-radius: 50%;">
                         <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
                     </div>
                     <div class="card-title">${artist}</div>
@@ -964,22 +1057,22 @@ HTML_TEMPLATE = """
                         </div>
                         <div class="grid">
                 `;
-                
+
                 for (let [token, pl] of Object.entries(playlists)) {
                     let sampleSong = pl.songs.length > 0 ? allSongs.find(s => s.filename === pl.songs[0]) : null;
                     let coverUrl = sampleSong ? getCoverUrl(sampleSong) : '';
-                    
+
                     html += `
                     <div class="card" onclick="viewPlaylist('${token}')" style="text-align:center;">
                         <div class="card-img-container">
-                            ${coverUrl ? `<img src="${coverUrl}" loading="lazy">` : '<i class="fas fa-music"></i>'}
+                            ${coverUrl ? `<img src="${coverUrl}" loading="lazy">` : '<i class="fas fa-music" style="font-size:40px; color:var(--accent);"></i>'}
                             <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
                         </div>
-                        <div class="card-title" style="text-align:center;">${pl.name}</div>
+                        <div class="card-title" style="text-align:center;">${pl.name.replace(/"/g, '&quot;')}</div>
                         <div class="card-artist" style="text-align:center; padding:0;">${pl.songs.length} tracks</div>
                     </div>`;
                 }
-                
+
                 html += `</div></div>`;
                 contentDiv.innerHTML = html;
             });
@@ -1001,14 +1094,17 @@ HTML_TEMPLATE = """
                 let playlistSongs = pl.songs.map(filename => allSongs.find(s => s.filename === filename)).filter(Boolean);
                 let shareUrl = window.location.origin + '/playlist/' + token;
                 
+                let filenameArr = JSON.stringify(playlistSongs.map(s => s.filename)).replace(/"/g, '&quot;');
+
                 contentDiv.innerHTML = `
                     <div class="fade-in">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
                             <div>
-                                <h2 style="margin-bottom:4px;">${pl.name}</h2>
+                                <h2 style="margin-bottom:4px;">${pl.name.replace(/"/g, '&quot;')}</h2>
                                 <p style="color:var(--subtext); margin:0; font-size:13px;">Created by ${pl.creator}</p>
                             </div>
                             <div style="display:flex; gap:10px;">
+                                ${playlistSongs.length > 0 ? `<button class="action-btn" style="background:var(--accent); color:black; font-weight:700;" onclick="playQueueByFilenames(${filenameArr}, 0)"><i class="fas fa-play"></i> Play Playlist</button>` : ''}
                                 <button class="action-btn" onclick="navigator.clipboard.writeText('${shareUrl}'); alert('Shareable link copied to clipboard!');"><i class="fas fa-share-alt"></i> Share Link</button>
                                 <button class="action-btn danger" onclick="deletePlaylist('${token}')"><i class="fas fa-trash"></i> Delete</button>
                             </div>
@@ -1033,20 +1129,43 @@ HTML_TEMPLATE = """
         }
 
         function openAddToPlaylistModal(filename) {
+            selectedSongForPlaylist = filename;
             fetch('/api/playlists').then(res => res.json()).then(playlists => {
-                let plNames = Object.entries(playlists).map(([token, pl]) => `${pl.name} (Token: ${token})`).join('\\n');
-                let tokenInput = prompt(`Add to which playlist token?\\n\\nAvailable Playlists:\\n${plNames}`);
-                if (!tokenInput) return;
-                
-                fetch(`/api/playlist/${tokenInput.trim()}/song`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({filename})
-                }).then(res => res.json()).then(data => {
-                    if(data.success) alert("Song added successfully!");
-                    else alert(data.error || "Failed to add song");
-                });
+                let modalList = document.getElementById('playlist-modal-list');
+                let html = '';
+
+                if (Object.keys(playlists).length === 0) {
+                    html = '<p style="color:var(--subtext);">No playlists found. Create one from the Playlists tab!</p>';
+                } else {
+                    for (let [token, pl] of Object.entries(playlists)) {
+                        html += `<div class="playlist-select-item" onclick="confirmAddToPlaylist('${token}')">
+                            <span><i class="fas fa-list"></i> ${pl.name.replace(/"/g, '&quot;')}</span>
+                            <span style="font-size:12px; color:var(--subtext);">${pl.songs.length} tracks</span>
+                        </div>`;
+                    }
+                }
+
+                modalList.innerHTML = html;
+                document.getElementById('playlist-modal').style.display = 'flex';
             });
+        }
+
+        function confirmAddToPlaylist(token) {
+            if (!selectedSongForPlaylist) return;
+            fetch(`/api/playlist/${token}/song`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: selectedSongForPlaylist})
+            }).then(res => res.json()).then(data => {
+                closePlaylistModal();
+                if(data.success) alert("Song added to playlist!");
+                else alert(data.error || "Failed to add song");
+            });
+        }
+
+        function closePlaylistModal() {
+            document.getElementById('playlist-modal').style.display = 'none';
+            selectedSongForPlaylist = null;
         }
 
         function renderSettings() {
@@ -1068,7 +1187,7 @@ HTML_TEMPLATE = """
                     </form>
                 </div>
             `;
-            
+
             if (currentUserIsAdmin) {
                 html += `
                 <h2 style="margin-top:40px;"><i class="fas fa-users-cog" style="color:var(--accent)"></i> User Management</h2>
@@ -1092,7 +1211,7 @@ HTML_TEMPLATE = """
                 </div>
                 `;
             }
-            
+
             html += `</div>`;
             contentDiv.innerHTML = html;
             if (currentUserIsAdmin) loadUsersTable();
@@ -1150,13 +1269,13 @@ HTML_TEMPLATE = """
             currentQueue = queue;
             originalQueue = [...queue];
             currentIndex = index;
-            if(isShuffle) toggleShuffle(); 
+            if(isShuffle) toggleShuffle();
             loadSong(currentQueue[currentIndex]);
         }
 
         function startRadio() {
             isRadioMode = true;
-            radioHistory = []; 
+            radioHistory = [];
             contentDiv.innerHTML = `
                 <div class="fade-in" style="text-align:center; margin-top: 100px;">
                     <i class="fas fa-broadcast-tower" style="font-size: 80px; color: var(--accent); margin-bottom: 20px;"></i>
@@ -1169,47 +1288,46 @@ HTML_TEMPLATE = """
 
         function loadSong(songObj) {
             currentSongObj = songObj;
-            
+
             if (isRadioMode) {
                 radioHistory.push(songObj.filename);
                 if (radioHistory.length > 15) radioHistory.shift();
             }
 
-            audio.src = '/play/' + encodeURIComponent(songObj.filename);
+            audio.src = '/play/' + encodeURIComponent(songObj.filename).replace(/%2F/g, '/');
             audio.play();
-            
+
             rightPanel.style.display = 'flex';
             let coverUrl = getCoverUrl(songObj);
-            
+
             document.title = "▶ " + songObj.title + " - " + songObj.artist;
-            
+
             document.getElementById('np-title').innerText = songObj.title;
             document.getElementById('np-artist').innerText = songObj.artist;
             document.getElementById('np-cover').src = coverUrl;
 
             document.getElementById('rp-title').innerText = songObj.title;
             document.getElementById('rp-artist').innerText = songObj.artist;
-            
+
             document.getElementById('rp-video-container').style.opacity = '0';
             document.getElementById('rp-cover').src = coverUrl;
             document.getElementById('rp-cover').style.opacity = '1';
             document.getElementById('rp-cover-glow').style.backgroundImage = `url('${coverUrl}')`;
-            
+
             updateMediaSession(songObj, coverUrl);
             fetchStatusAndLog(songObj.filename);
             fetchLyrics(songObj.artist, songObj.title);
-            
+
             const currentOrigin = encodeURIComponent(window.location.origin);
-            
+
             fetch(`/api/video?artist=${encodeURIComponent(songObj.artist)}&song=${encodeURIComponent(songObj.title)}`)
                 .then(res => res.json())
                 .then(data => {
                     if (data.youtube_id && currentSongObj.filename === songObj.filename) {
-                        if (ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
-                            ytPlayer.loadVideoById({ 'videoId': data.youtube_id, 'startSeconds': 0 });
+                        if (ytPlayerReady && ytPlayer && typeof ytPlayer.loadVideoById === 'function') {
+                            ytPlayer.loadVideoById({ 'videoId': data.youtube_id, 'startSeconds': audio.currentTime });
                             ytPlayer.mute();
-                        } else {
-                            // Initialize YouTube API player cleanly
+                        } else if (ytPlayerReady) {
                             ytPlayer = new YT.Player('rp-video', {
                                 height: '337',
                                 width: '600',
@@ -1219,6 +1337,7 @@ HTML_TEMPLATE = """
                                     'controls': 0,
                                     'disablekb': 1,
                                     'modestbranding': 1,
+                                    'start': Math.floor(audio.currentTime),
                                     'origin': window.location.origin
                                 },
                                 events: {
@@ -1229,7 +1348,7 @@ HTML_TEMPLATE = """
                                 }
                             });
                         }
-                        
+
                         setTimeout(() => {
                             if(currentSongObj.filename === songObj.filename) {
                                 document.getElementById('rp-video-container').style.opacity = '1';
@@ -1274,7 +1393,7 @@ HTML_TEMPLATE = """
             const lines = lrcString.split('\\n');
             const regex = /\\[(\\d{2}):(\\d{2}\\.\\d{2,3})\\](.*)/;
             syncedLyrics = [];
-            
+
             lines.forEach(line => {
                 const match = line.match(regex);
                 if (match) {
@@ -1292,9 +1411,9 @@ HTML_TEMPLATE = """
                 if (i < syncedLyrics.length - 1) {
                     gap = syncedLyrics[i+1].time - syncedLyrics[i].time;
                 }
-                
+
                 syncedLyrics[i].duration = Math.min(gap, Math.max(1.5, syncedLyrics[i].words.length * 0.45));
-                
+
                 let totalChars = syncedLyrics[i].words.reduce((sum, w) => sum + w.length, 0);
                 let charAcc = 0;
                 syncedLyrics[i].wordTimings = syncedLyrics[i].words.map(w => {
@@ -1310,13 +1429,13 @@ HTML_TEMPLATE = """
                 const el = document.createElement('div');
                 el.className = 'lyric-line';
                 el.id = `lyric-${index}`;
-                
+
                 let wordsHTML = '';
                 line.words.forEach((word, wIndex) => {
                     wordsHTML += `<span class="lyric-word" id="word-${index}-${wIndex}">${word}</span> `;
                 });
                 el.innerHTML = wordsHTML;
-                
+
                 el.onclick = () => { audio.currentTime = line.time; audio.play(); };
                 lyricsContainer.appendChild(el);
             });
@@ -1334,7 +1453,7 @@ HTML_TEMPLATE = """
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({action: 'listen', song: filename})
-            }).then(() => refreshStatsUI()); 
+            }).then(() => refreshStatsUI());
         }
 
         function nextTrack() {
@@ -1355,7 +1474,7 @@ HTML_TEMPLATE = """
                 }
             }
         }
-        
+
         function prevTrack() {
             if(audio.currentTime > 3) {
                 audio.currentTime = 0;
@@ -1368,7 +1487,7 @@ HTML_TEMPLATE = """
         function animateButton(btnId) {
             const btn = document.getElementById(btnId);
             btn.classList.remove('pop-anim');
-            void btn.offsetWidth; 
+            void btn.offsetWidth;
             btn.classList.add('pop-anim');
         }
 
@@ -1400,7 +1519,7 @@ HTML_TEMPLATE = """
                     document.getElementById('dislike-btn').classList.toggle('active');
                     document.getElementById('like-btn').classList.remove('active');
                     animateButton('dislike-btn');
-                    if(isRadioMode) nextTrack(); 
+                    if(isRadioMode) nextTrack();
                 }
                 refreshStatsUI();
             });
@@ -1442,13 +1561,13 @@ PUBLIC_PLAYLIST_TEMPLATE = """
             </div>
             <a href="/" class="primary-btn"><i class="fas fa-home"></i> Open Streamer Pro</a>
         </div>
-        
+
         <h3>Tracks ({{ songs|length }})</h3>
         <div style="margin-top:20px;">
             {% for song in songs %}
             <div class="song-row">
                 <div class="song-info">
-                    <img src="{{ url_for('local_cover', filename=song.filename) }}" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'48\\' height=\\'48\\' viewBox=\\'0 0 48 48\\'><rect width=\\'48\\' height=\\'48\\' fill=\\'%23222\\'/><text x=\\'50%\\' y=\\'50%\\' fill=\\'%231DB954\\' font-size=\\'20\\' text-anchor=\\'middle\\' dominant-baseline=\\'middle\\'>🎵</text></svg>'">
+                    <img src="/api/cover?file={{ song.filename | urlencode }}">
                     <div>
                         <div style="font-weight:700; font-size:15px;">{{ song.title }}</div>
                         <div style="color:var(--subtext); font-size:13px; margin-top:2px;">{{ song.artist }}</div>
@@ -1469,14 +1588,14 @@ PUBLIC_PLAYLIST_TEMPLATE = """
 def index():
     db = load_db()
     users = db.get("users", {})
-    
+
     if users:
         has_admin = any(u.get("is_admin", False) for u in users.values())
         if not has_admin:
             first_user = list(users.keys())[0]
             users[first_user]["is_admin"] = True
             save_db(db)
-            
+
     if not users:
         if request.method == 'POST':
             username = request.form['username']
@@ -1485,7 +1604,7 @@ def index():
             save_db(db)
             return redirect(url_for('index'))
         return render_template_string(HTML_TEMPLATE, logged_in=False, setup=True)
-        
+
     if 'user' not in session:
         if request.method == 'POST':
             username = request.form['username']
@@ -1495,11 +1614,11 @@ def index():
                 session['is_admin'] = users[username].get('is_admin', False)
                 return redirect(url_for('index'))
         return render_template_string(HTML_TEMPLATE, logged_in=False, setup=False)
-        
+
     current_user_data = users.get(session['user'], {})
     is_admin = current_user_data.get('is_admin', False)
     session['is_admin'] = is_admin
-        
+
     return render_template_string(HTML_TEMPLATE, logged_in=True, is_admin=is_admin)
 
 @app.route('/logout')
@@ -1522,10 +1641,10 @@ def api_data():
 @app.route('/api/radio/next')
 def api_radio():
     if 'user' not in session: return jsonify({})
-    
+
     history_param = request.args.get('history', '')
     history_list = [urllib.parse.unquote(x) for x in history_param.split(',')] if history_param else []
-    
+
     next_song_obj = get_radio_recommendation(session['user'], history_list)
     return jsonify({"song": next_song_obj})
 
@@ -1543,7 +1662,7 @@ def api_playlists():
         data = request.json
         name = data.get('name', '').strip()
         if not name: return jsonify({"success": False, "error": "Playlist name required"})
-        
+
         token = uuid.uuid4().hex[:8]
         db['playlists'][token] = {
             "name": name,
@@ -1597,7 +1716,7 @@ def public_playlist_view(token):
     db = load_db()
     playlists = db.get('playlists', {})
     if token not in playlists: return "Playlist not found", 404
-    
+
     pl = playlists[token]
     songs = [get_song_metadata(f) for f in pl['songs'] if os.path.exists(os.path.join(MUSIC_DIR, f))]
     return render_template_string(PUBLIC_PLAYLIST_TEMPLATE, playlist=pl, songs=songs)
@@ -1643,17 +1762,17 @@ def api_feedback():
 def change_password_api():
     if 'user' not in session:
         return jsonify({"success": False, "error": "Unauthorized"}), 401
-        
+
     data = request.json
     curr_pwd = data.get('current_password', '')
     new_pwd = data.get('new_password', '')
-    
+
     db = load_db()
     user_data = db["users"].get(session['user'])
-    
+
     if not user_data or not check_password_hash(user_data['password'], curr_pwd):
         return jsonify({"success": False, "error": "Incorrect current password"})
-        
+
     user_data['password'] = generate_password_hash(new_pwd)
     save_db(db)
     return jsonify({"success": True})
@@ -1662,22 +1781,22 @@ def change_password_api():
 def admin_users_api():
     if not session.get('is_admin'):
         return jsonify({"error": "Unauthorized"}), 403
-        
+
     db = load_db()
-    
+
     if request.method == 'GET':
         safe_users = {uname: {"is_admin": udata.get("is_admin", False)} for uname, udata in db["users"].items()}
         return jsonify(safe_users)
-        
+
     elif request.method == 'POST':
         data = request.json
         uname = data.get('username', '').strip()
         pwd = data.get('password', '')
         is_admin = bool(data.get('is_admin', False))
-        
+
         if not uname or not pwd:
             return jsonify({"success": False, "error": "Username and password required"})
-            
+
         db["users"][uname] = {
             "password": generate_password_hash(pwd),
             "is_admin": is_admin,
@@ -1687,7 +1806,7 @@ def admin_users_api():
         }
         save_db(db)
         return jsonify({"success": True})
-        
+
     elif request.method == 'DELETE':
         data = request.json
         uname = data.get('username', '')
@@ -1697,98 +1816,44 @@ def admin_users_api():
             return jsonify({"success": True})
         return jsonify({"success": False, "error": "Cannot delete active or non-existent user"})
 
-@app.route('/api/cover/embedded')
-def api_embedded_cover():
-    filename = request.args.get('file', '')
-    filepath = os.path.join(MUSIC_DIR, filename)
-    try:
-        audio = mutagen.File(filepath)
-        if hasattr(audio, 'tags') and audio.tags:
-            for key in audio.tags.keys():
-                if key.startswith('APIC'):
-                    pic = audio.tags[key]
-                    return Response(pic.data, mimetype=pic.mime)
-        if hasattr(audio, 'pictures') and audio.pictures:
-            pic = audio.pictures[0]
-            return Response(pic.data, mimetype=pic.pic_data if hasattr(pic, 'pic_data') else pic.data)
-    except: pass
-    return redirect("data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=")
-
 @app.route('/api/cover')
 def api_cover():
-    artist = request.args.get('artist', '').strip()
-    song = request.args.get('song', '').strip()
-    file = request.args.get('file', '').strip()
-    
-    cache_key = f"{artist} | {song} | v7"
-    if cache_key in cover_cache and cover_cache[cache_key]: 
-        return redirect(cover_cache[cache_key])
+    """Safely return raw image bytes from local tags, or a clean SVG if none exists."""
+    filename = request.args.get('file', '')
+    filepath = os.path.join(MUSIC_DIR, filename)
 
-    if file:
-        song_dir = os.path.dirname(os.path.join(MUSIC_DIR, file))
-        valid_exts = ('.jpg', '.jpeg', '.png', '.webp')
-        song_clean = os.path.splitext(os.path.basename(file))[0].lower()
-        if os.path.exists(song_dir):
-            for f in os.listdir(song_dir):
-                if f.lower().endswith(valid_exts) and os.path.splitext(f)[0].lower() == song_clean:
-                    rel_img = os.path.relpath(os.path.join(song_dir, f), MUSIC_DIR)
-                    local_url = f"/local_cover/{urllib.parse.quote(rel_img)}"
-                    cover_cache[cache_key] = local_url
-                    save_json_file(COVERS_FILE, cover_cache)
-                    return redirect(local_url)
+    if os.path.exists(filepath):
+        try:
+            audio = mutagen.File(filepath)
+            if audio is not None:
+                if hasattr(audio, 'tags') and audio.tags:
+                    for key in audio.tags.keys():
+                        if key.startswith('APIC'):
+                            pic = audio.tags[key]
+                            return Response(pic.data, mimetype=pic.mime)
+                if hasattr(audio, 'pictures') and audio.pictures:
+                    pic = audio.pictures[0]
+                    img_data = getattr(pic, 'data', None) or getattr(pic, 'pic_data', None)
+                    if img_data:
+                        return Response(img_data, mimetype=pic.mime)
+        except Exception:
+            pass
 
-    mb_url = fetch_musicbrainz_cover(artist, song)
-    if mb_url:
-        cover_cache[cache_key] = mb_url
-        save_json_file(COVERS_FILE, cover_cache)
-        return redirect(mb_url)
-
-    itunes_url = fetch_itunes_cover(artist, song)
-    if itunes_url:
-        cover_cache[cache_key] = itunes_url
-        save_json_file(COVERS_FILE, cover_cache)
-        return redirect(itunes_url)
-
-    fallback_svg = generate_svg_fallback(song)
-    cover_cache[cache_key] = fallback_svg
-    save_json_file(COVERS_FILE, cover_cache)
-    return redirect(fallback_svg)
+    # Safe fallback if no image could be extracted
+    meta = get_song_metadata(filename) if filename else {"artist": "Unknown", "title": "Music"}
+    svg = generate_placeholder_cover(meta['artist'], meta['title'])
+    return Response(svg, mimetype='image/svg+xml')
 
 @app.route('/api/video')
 def api_video():
     artist = request.args.get('artist', '').strip()
     song = request.args.get('song', '').strip()
-    
+
     if not artist or artist == "Unknown Artist":
         return jsonify({"youtube_id": None})
-        
-    cache_key = f"{artist} | {song}"
-    if cache_key in video_cache:
-        return jsonify({"youtube_id": video_cache[cache_key]})
 
-    query = f"{artist} {song} official music video"
-    url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
-    
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
-            html = resp.read().decode('utf-8')
-            match = re.search(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
-            if match:
-                vid = match.group(1)
-                video_cache[cache_key] = vid
-                save_json_file(VIDEO_CACHE_FILE, video_cache)
-                return jsonify({"youtube_id": vid})
-    except Exception:
-        pass
-    
-    video_cache[cache_key] = None
-    save_json_file(VIDEO_CACHE_FILE, video_cache)
-    return jsonify({"youtube_id": None})
-
-@app.route('/local_cover/<path:filename>')
-def local_cover(filename):
-    return send_from_directory(MUSIC_DIR, filename)
+    youtube_id = search_youtube_video(artist, song)
+    return jsonify({"youtube_id": youtube_id})
 
 if __name__ == '__main__':
     print(f"🎵 App running on port {PORT}! Open http://localhost:{PORT}")

@@ -30,7 +30,7 @@
         "Prince - Purple Rain (2015 Paisley Park Remaster).mp3": 1,
         "Chappell Roan - Pink Pony Club.mp3": 1,
         "Linkin Park/00 - Linkin Park - A Place for My Head.flac": 12,
-        "Linkin Park/00 - Linkin Park - Bleed It Out.flac": 16,
+        "Linkin Park/00 - Linkin Park - Bleed It Out.flac": 17,
         "Linkin Park/00 - Linkin Park - What I've Done.flac": 1,
         "Linkin Park/00 - Linkin Park - Breaking the Habit.flac": 4,
         "Linkin Park/00 - Linkin Park - Somewhere I Belong.flac": 3,
@@ -48,6 +48,15 @@
       "likes": [],
       "dislikes": [],
       "play_counts": {}
+    }
+  },
+  "playlists": {
+    "9c7256e0": {
+      "name": "jeff",
+      "creator": "RW2012",
+      "songs": [
+        "Linkin Park/00 - Linkin Park - Bleed It Out.flac"
+      ]
     }
   }
 }
