@@ -33,12 +33,12 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 MUSIC_DIR = os.path.abspath(os.environ.get("MUSIC_DIR", os.path.join(BASE_DIR, "Music")))
 os.makedirs(MUSIC_DIR, exist_ok=True)
 
-# DATA_DIR points to Render's persistent disk path if mounted (e.g. /var/data)
+# DATA_DIR points to persistent storage
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
 CACHE_DIR = os.path.join(DATA_DIR, "Cache_Art")
 PROFILES_DIR = os.path.join(DATA_DIR, "Profiles")
 DB_FILE = os.path.join(DATA_DIR, 'database.json')
-METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v12.json')
+METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v13.json')
 VIDEO_CACHE_FILE = os.path.join(DATA_DIR, 'videos_v2.json')
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -137,7 +137,8 @@ def parse_folder_and_filename(rel_path):
 
 def normalize_artist(raw_artist):
     if not raw_artist: return "Unknown Artist"
-    cleaned = re.split(r'\s*(?:;|feat\.?|ft\.?|&|with|,|/)\s*', raw_artist, flags=re.IGNORECASE)[0]
+    # FIX: Do not split on commas (,) so names like "Tyler, The Creator" are preserved completely
+    cleaned = re.split(r'\s*(?:;|feat\.?|ft\.?|with)\s*', raw_artist, flags=re.IGNORECASE)[0]
     return cleaned.strip() or "Unknown Artist"
 
 def extract_audio_tags(full_path, rel_path):
@@ -309,7 +310,7 @@ def search_youtube_video(artist, song):
     return None
 
 # ---------------------------------------------------------
-# HIGH-END HTML & UI TEMPLATES
+# HIGH-END HTML & UI TEMPLATES WITH MOBILE RESPONSIVENESS
 # ---------------------------------------------------------
 LOGIN_TEMPLATE = """
 <!DOCTYPE html>
@@ -337,6 +338,8 @@ LOGIN_TEMPLATE = """
             background-size: 400% 400%;
             animation: gradientBG 15s ease infinite;
             color: white; 
+            padding: 20px;
+            box-sizing: border-box;
         }
         .auth-card { 
             background: rgba(20, 20, 20, 0.4); 
@@ -345,7 +348,8 @@ LOGIN_TEMPLATE = """
             padding: 45px 40px; 
             border-radius: 20px; 
             text-align: center; 
-            width: 360px; 
+            width: 100%;
+            max-width: 360px; 
             border: 1px solid rgba(255,255,255,0.05); 
             box-shadow: 0 25px 50px rgba(0,0,0,0.6); 
         }
@@ -393,7 +397,7 @@ HTML_TEMPLATE = """
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Streamer Pro</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -435,7 +439,7 @@ HTML_TEMPLATE = """
         .queue-item img { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
         .queue-item-info { display: flex; flex-direction: column; overflow: hidden; flex: 1; gap: 2px; }
 
-        .player-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 96px; background: rgba(10, 10, 10, 0.7); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); border-top: 1px solid rgba(255,255,255,0.05); display: flex; align-items: center; padding: 0 32px; justify-content: space-between; z-index: 1000; }
+        .player-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 96px; background: rgba(10, 10, 10, 0.75); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); border-top: 1px solid rgba(255,255,255,0.05); display: flex; align-items: center; padding: 0 32px; justify-content: space-between; z-index: 1000; }
         .search-container { display: flex; align-items: center; background: rgba(255,255,255,0.05); border-radius: 30px; padding: 10px 20px; width: 340px; border: 1px solid rgba(255,255,255,0.05); transition: 0.3s; }
         .search-container:focus-within { border-color: var(--accent); background: rgba(255,255,255,0.1); box-shadow: 0 0 15px rgba(29, 185, 84, 0.1); }
         .search-container i { color: var(--subtext); font-size: 16px; margin-right: 12px; }
@@ -444,7 +448,7 @@ HTML_TEMPLATE = """
         .user-badge-wrapper { position: relative; display: inline-block; }
         .user-badge { display: flex; align-items: center; gap: 12px; font-size: 14px; font-weight: 700; background: rgba(0,0,0,0.3); padding: 8px 16px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.05); cursor: pointer; transition: 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
         .user-badge:hover { background: rgba(255,255,255,0.1); transform: translateY(-2px); }
-        .settings-dropdown { display: none; position: absolute; right: 0; top: 55px; background: rgba(30,30,30,0.9); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; width: 220px; box-shadow: 0 15px 35px rgba(0,0,0,0.8); z-index: 100; overflow: hidden; padding: 8px 0; }
+        .settings-dropdown { display: none; position: absolute; right: 0; top: 55px; background: rgba(30,30,30,0.95); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; width: 220px; box-shadow: 0 15px 35px rgba(0,0,0,0.8); z-index: 100; overflow: hidden; padding: 8px 0; }
         .settings-dropdown.show { display: block; animation: fadeIn 0.2s ease; }
         .dropdown-item { padding: 12px 20px; font-size: 14px; font-weight: 600; color: var(--subtext); display: flex; align-items: center; gap: 14px; cursor: pointer; text-decoration: none; transition: 0.2s; }
         .dropdown-item:hover { background: rgba(255,255,255,0.05); color: var(--text); }
@@ -454,14 +458,12 @@ HTML_TEMPLATE = """
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 24px; margin-bottom: 48px; }
         .scroll-row { display: flex; gap: 24px; overflow-x: auto; padding-bottom: 20px; margin-bottom: 40px; scroll-snap-type: x mandatory; }
         
-        /* FIXED: Force strict width, min-width, and max-width on scroll row cards to stop stretching */
+        /* Force strict width, min-width, and max-width on scroll row cards to stop stretching */
         .scroll-row .card { width: 200px; min-width: 200px; max-width: 200px; flex-shrink: 0; scroll-snap-align: start; display: flex; flex-direction: column; }
         
-        /* FIXED: Set flex-direction column on base card */
         .card { background: var(--card-bg); backdrop-filter: blur(10px); padding: 18px; border-radius: 12px; cursor: pointer; transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); position: relative; text-align: left; border: 1px solid rgba(255,255,255,0.03); display: flex; flex-direction: column; }
         .card:hover { background: rgba(40,40,40,0.8); transform: translateY(-8px); box-shadow: 0 20px 40px rgba(0,0,0,0.5); border-color: rgba(255,255,255,0.1); }
         
-        /* FIXED: Force perfect square with flex-shrink: 0 and aspect-ratio: 1/1 */
         .card-img-container { width: 100%; aspect-ratio: 1 / 1; background: #222; border-radius: 8px; margin-bottom: 16px; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 40px; color: #444; box-shadow: 0 8px 20px rgba(0,0,0,0.4); flex-shrink: 0; }
         .card-img-container img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; transition: transform 0.5s ease; }
         
@@ -545,19 +547,93 @@ HTML_TEMPLATE = """
         .chat-send-btn { background: var(--accent); color: black; border: none; width: 50px; height: 50px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; transition: 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); box-shadow: 0 5px 15px rgba(29, 185, 84, 0.3); }
         .chat-send-btn:hover { transform: scale(1.1); background: #1ed760; }
 
-        ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 10px; }
-        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
-        
-        .eq-container { display: flex; align-items: flex-end; gap: 4px; height: 18px; }
-        .eq-bar { width: 4px; background: var(--accent); border-radius: 2px; animation: eqbounce 1s infinite ease-in-out; box-shadow: 0 0 8px rgba(29, 185, 84, 0.5);}
-        .eq-bar:nth-child(1) { height: 40%; animation-delay: 0s; }
-        .eq-bar:nth-child(2) { height: 70%; animation-delay: 0.2s; }
-        .eq-bar:nth-child(3) { height: 50%; animation-delay: 0.4s; }
-        .eq-container.paused .eq-bar { animation-play-state: paused; height: 20% !important; transition: height 0.3s ease; box-shadow: none;}
-        @keyframes eqbounce { 0%, 100% { transform: scaleY(0.6); } 50% { transform: scaleY(1.0); } }
-        
+        /* ---------------------------------------------------------
+           MOBILE RESPONSIVE STYLING (@media max-width: 768px)
+        --------------------------------------------------------- */
+        @media (max-width: 768px) {
+            body { flex-direction: column; overflow: auto; }
+
+            /* Mobile Bottom Navigation Bar */
+            .sidebar {
+                position: fixed;
+                bottom: 88px;
+                left: 0;
+                right: 0;
+                width: 100%;
+                height: auto;
+                flex-direction: row;
+                justify-content: space-around;
+                align-items: center;
+                padding: 6px 8px;
+                background: rgba(10, 10, 10, 0.95);
+                backdrop-filter: blur(25px);
+                -webkit-backdrop-filter: blur(25px);
+                border-top: 1px solid rgba(255,255,255,0.08);
+                border-right: none;
+                z-index: 999;
+                gap: 0;
+            }
+            .sidebar .logo, .sidebar .nav-section-title { display: none; }
+            .sidebar .nav-item {
+                flex-direction: column;
+                gap: 3px;
+                font-size: 10px;
+                padding: 6px 8px;
+                border-radius: 8px;
+            }
+            .sidebar .nav-item i { font-size: 16px; width: auto; }
+            .sidebar .nav-item:hover, .sidebar .nav-item.active { transform: none; }
+
+            /* Main Content & Top Bar Mobile Adjustments */
+            .center-wrapper { margin-bottom: 160px; }
+            .top-bar { padding: 0 16px; height: 64px; }
+            .search-container { width: 170px; padding: 8px 14px; }
+            .search-container input { font-size: 13px; }
+            .main-content { padding: 84px 16px 140px 16px; }
+
+            /* Grid & Card Mobile Touch Layout */
+            h2 { font-size: 22px; margin-bottom: 16px; }
+            .grid { grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); gap: 14px; margin-bottom: 32px; }
+            .scroll-row { gap: 14px; padding-bottom: 12px; margin-bottom: 24px; }
+            .scroll-row .card { width: 140px; min-width: 140px; max-width: 140px; padding: 12px; }
+            .card { padding: 12px; border-radius: 10px; }
+            .card-title { font-size: 14px; }
+            .card-artist { font-size: 12px; }
+            .card-play-overlay { width: 38px; height: 38px; bottom: 8px; right: 8px; opacity: 1; transform: none; }
+
+            /* Player Bar Mobile Optimization */
+            .player-bar {
+                height: 88px;
+                padding: 0 16px;
+            }
+            .now-playing-info { width: 45%; gap: 10px; }
+            .np-cover { width: 48px; height: 48px; border-radius: 6px; }
+            .np-title { font-size: 13px; }
+            .np-artist { font-size: 11px; }
+            .controls { width: 50%; gap: 4px; }
+            .buttons { gap: 14px; }
+            .btn { font-size: 16px; }
+            .btn.play-btn { width: 34px; height: 34px; }
+            .volume-controls { display: none; } /* Hide volume & bass sliders on mobile */
+
+            /* Right Panel Fullscreen Mobile Drawer */
+            .right-panel {
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 88px;
+                width: 100%; height: auto;
+                margin: 0;
+                z-index: 1001;
+                border-radius: 0;
+                background: rgba(10, 10, 10, 0.98);
+                padding: 20px 16px;
+            }
+
+            /* Social Messaging Mobile Layout */
+            .social-container { flex-direction: column; height: auto; }
+            .social-sidebar { width: 100%; height: 250px; }
+            .chat-area { width: 100%; height: 400px; }
+        }
+
         @keyframes radioPulse { 
             0% { transform: scale(0.95); opacity: 0.3; } 
             100% { transform: scale(1.15); opacity: 0.6; } 
@@ -578,24 +654,24 @@ HTML_TEMPLATE = """
         <div class="logo"><i class="fab fa-spotify" style="color:var(--accent); font-size: 26px;"></i> Streamer Pro</div>
         
         <div class="nav-section-title">Discover</div>
-        <div class="nav-item active" onclick="switchView('home', this)"><i class="fas fa-home"></i> Home</div>
-        <div class="nav-item" onclick="document.getElementById('global-search').focus();"><i class="fas fa-search"></i> Search</div>
-        <div class="nav-item" onclick="switchView('artists', this)"><i class="fas fa-microphone"></i> Artists</div>
-        <div class="nav-item" onclick="switchView('playlists', this)"><i class="fas fa-list-music"></i> Playlists</div>
-        <div class="nav-item" onclick="switchView('radio', this)"><i class="fas fa-broadcast-tower"></i> Infinite Radio</div>
+        <div class="nav-item active" onclick="switchView('home', this)"><i class="fas fa-home"></i> <span>Home</span></div>
+        <div class="nav-item" onclick="document.getElementById('global-search').focus();"><i class="fas fa-search"></i> <span>Search</span></div>
+        <div class="nav-item" onclick="switchView('artists', this)"><i class="fas fa-microphone"></i> <span>Artists</span></div>
+        <div class="nav-item" onclick="switchView('playlists', this)"><i class="fas fa-list-music"></i> <span>Playlists</span></div>
+        <div class="nav-item" onclick="switchView('radio', this)"><i class="fas fa-broadcast-tower"></i> <span>Radio</span></div>
         
         <div class="nav-section-title" style="margin-top: 24px;">Social</div>
-        <div class="nav-item" onclick="switchView('messages', this)"><i class="fas fa-comment-alt"></i> Messages</div>
+        <div class="nav-item" onclick="switchView('messages', this)"><i class="fas fa-comment-alt"></i> <span>Messages</span></div>
 
         <div class="nav-section-title" style="margin-top: 24px;">General</div>
-        <div class="nav-item" onclick="switchView('settings', this)"><i class="fas fa-cog"></i> Settings</div>
+        <div class="nav-item" onclick="switchView('settings', this)"><i class="fas fa-cog"></i> <span>Settings</span></div>
     </div>
 
     <div class="center-wrapper">
         <div class="top-bar">
             <div class="search-container">
                 <i class="fas fa-search"></i>
-                <input type="text" id="global-search" placeholder="Search songs or artists..." oninput="handleSearch(this.value)">
+                <input type="text" id="global-search" placeholder="Search songs..." oninput="handleSearch(this.value)">
             </div>
             
             <div class="user-badge-wrapper">
@@ -1145,12 +1221,6 @@ HTML_TEMPLATE = """
         function switchView(view, el=null) {
             document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
             if(el) el.classList.add('active');
-            else {
-                let idx = ['home', 'search', 'artists', 'playlists', 'radio', 'messages', 'settings'].indexOf(view);
-                if (idx !== -1) {
-                    let items = document.querySelectorAll('.nav-item');
-                }
-            }
             
             document.getElementById('global-search').value = '';
             
@@ -1206,16 +1276,16 @@ HTML_TEMPLATE = """
 
         function renderRadio() {
             contentDiv.innerHTML = `
-                <div class="fade-in" style="display:flex; flex-direction:column; align-items:center; justify-content:center; height: 100%; text-align:center;">
-                    <div style="position:relative; width: 160px; height: 160px; display:flex; align-items:center; justify-content:center; margin-bottom: 40px;">
-                        <div class="radio-glow"></div>
+                <div class="fade-in" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height: 80vh; text-align:center; padding: 20px;">
+                    <div style="position:relative; width: 160px; height: 160px; display:flex; align-items:center; justify-content:center; margin-bottom: 30px;">
+                        <div class="radio-glow" style="position:absolute; width:100%; height:100%; background:var(--accent); border-radius:50%; opacity:0.3; filter:blur(30px); animation: radioPulse 2s infinite alternate;"></div>
                         <i class="fas fa-broadcast-tower" style="font-size: 64px; color: var(--text); z-index: 2; filter: drop-shadow(0 0 10px rgba(255,255,255,0.5));"></i>
                     </div>
-                    <h2 style="font-size: 48px; margin-bottom: 16px; font-weight: 800; letter-spacing: -1px;">Infinite Radio</h2>
-                    <p style="color: var(--subtext); font-size: 18px; max-width: 450px; line-height: 1.6; margin-bottom: 40px; font-weight:500;">
+                    <h2 style="font-size: 40px; margin-bottom: 16px; font-weight: 800; letter-spacing: -1px;">Infinite Radio</h2>
+                    <p style="color: var(--subtext); font-size: 16px; max-width: 450px; line-height: 1.6; margin-bottom: 30px; font-weight:500;">
                         An endless stream tailored to your listening habits, blending your favorites with seamless discovery.
                     </p>
-                    <div id="radio-current-status" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 18px 28px; border-radius: 30px; display: flex; align-items: center; gap: 12px; font-weight: 700; box-shadow: 0 10px 25px rgba(0,0,0,0.3);">
+                    <div id="radio-current-status" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 16px 24px; border-radius: 30px; display: flex; align-items: center; gap: 12px; font-weight: 700; box-shadow: 0 10px 25px rgba(0,0,0,0.3); font-size:14px;">
                         <i class="fas fa-satellite-dish" style="color: var(--accent);"></i> Tuning in...
                     </div>
                 </div>
@@ -1251,7 +1321,6 @@ HTML_TEMPLATE = """
             if (!songObj) return;
             currentSongObj = songObj;
             
-            // Fix: Map components to safely URL encode folder structures while keeping slashes intact
             let fileUrl = `/play/` + songObj.filename.split('/').map(encodeURIComponent).join('/');
             audio.src = fileUrl;
             
@@ -1484,12 +1553,12 @@ HTML_TEMPLATE = """
                 let coverUrl = getCoverUrl(sampleSong);
                 let escapedArtist = artist.replace(/'/g, "\\\\'").replace(/"/g, '&quot;');
                 topArtistsHtml += `
-                <div class="card" onclick="renderGrid(groupedArtists['${escapedArtist}'], '${escapedArtist}')" style="text-align:center; min-width: 160px; padding: 20px;">
-                    <div class="card-img-container" style="border-radius: 50%; height: 120px; width: 120px; margin: 0 auto 16px auto; box-shadow: 0 10px 20px rgba(0,0,0,0.5);">
+                <div class="card" onclick="renderGrid(groupedArtists['${escapedArtist}'], '${escapedArtist}')" style="text-align:center; min-width: 150px; width: 150px; max-width: 150px; padding: 16px;">
+                    <div class="card-img-container" style="border-radius: 50%; height: 110px; width: 110px; margin: 0 auto 12px auto; box-shadow: 0 10px 20px rgba(0,0,0,0.5);">
                         <img src="${coverUrl}" loading="lazy" style="border-radius: 50%;">
                         <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
                     </div>
-                    <div class="card-title" style="font-size: 15px; margin-bottom: 4px;">${artist}</div>
+                    <div class="card-title" style="font-size: 14px; margin-bottom: 4px;">${artist}</div>
                     <div style="font-size:12px; color:var(--subtext); font-weight: 500;">${groupedArtists[artist].length} tracks</div>
                 </div>`;
             });
@@ -1506,11 +1575,11 @@ HTML_TEMPLATE = """
                     <h2 style="margin-bottom: 20px; margin-top: 10px;"><i class="fas fa-users" style="color:var(--accent); margin-right:12px;"></i>Featured Artists</h2>
                     ${topArtistsHtml}
 
-                    <div style="text-align: center; margin-top: 40px; margin-bottom: 50px; background: rgba(255,255,255,0.02); padding: 50px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 10px 30px rgba(0,0,0,0.2);">
-                        <i class="fas fa-compact-disc" style="font-size: 48px; color: var(--accent); margin-bottom: 24px; opacity: 0.8; filter: drop-shadow(0 0 15px rgba(29, 185, 84, 0.4));"></i>
-                        <h2 style="margin-bottom: 12px; font-size: 32px;">Your Full Library</h2>
-                        <p style="color: var(--subtext); font-size: 16px; margin-bottom: 30px; font-weight: 500;">Explore all ${allSongs.length} tracks in your collection.</p>
-                        <button class="action-btn" style="background:var(--accent); color:black; padding: 16px 40px; font-size: 16px; font-weight: 800; border-radius: 30px; box-shadow: 0 10px 25px rgba(29, 185, 84, 0.4);" onclick="renderAllSongs()">
+                    <div style="text-align: center; margin-top: 40px; margin-bottom: 50px; background: rgba(255,255,255,0.02); padding: 40px 20px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 10px 30px rgba(0,0,0,0.2);">
+                        <i class="fas fa-compact-disc" style="font-size: 48px; color: var(--accent); margin-bottom: 20px; opacity: 0.8; filter: drop-shadow(0 0 15px rgba(29, 185, 84, 0.4));"></i>
+                        <h2 style="margin-bottom: 12px; font-size: 28px;">Your Full Library</h2>
+                        <p style="color: var(--subtext); font-size: 15px; margin-bottom: 24px; font-weight: 500;">Explore all ${allSongs.length} tracks in your collection.</p>
+                        <button class="action-btn" style="background:var(--accent); color:black; padding: 14px 32px; font-size: 15px; font-weight: 800; border-radius: 30px; box-shadow: 0 10px 25px rgba(29, 185, 84, 0.4);" onclick="renderAllSongs()">
                             Browse All Songs
                         </button>
                     </div>
@@ -1524,7 +1593,7 @@ HTML_TEMPLATE = """
                 <div class="fade-in">
                     <div style="display:flex; align-items:center; gap: 20px; margin-bottom: 30px;">
                         <button class="action-btn" style="background:rgba(255,255,255,0.1); padding:12px 18px; border-radius:50%; box-shadow: none;" onclick="switchView('home')"><i class="fas fa-arrow-left"></i></button>
-                        <h2 style="margin:0; font-size: 36px;">All Songs</h2>
+                        <h2 style="margin:0; font-size: 32px;">All Songs</h2>
                     </div>
                     ${buildCardsHTML(allSongs)}
                 </div>
@@ -1603,10 +1672,10 @@ HTML_TEMPLATE = """
 
                 contentDiv.innerHTML = `
                     <div class="fade-in">
-                        <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:30px; background: rgba(255,255,255,0.02); padding: 30px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.05);">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:30px; background: rgba(255,255,255,0.02); padding: 30px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.05); flex-wrap:wrap; gap:16px;">
                             <div>
                                 <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--subtext); margin-bottom: 8px; font-weight: 700;">Playlist</div>
-                                <h2 style="margin-bottom:8px; font-size: 42px;">${pl.name.replace(/"/g, '&quot;')}</h2>
+                                <h2 style="margin-bottom:8px; font-size: 36px;">${pl.name.replace(/"/g, '&quot;')}</h2>
                                 <p style="color:var(--subtext); margin:0; font-size:14px; font-weight: 500;">Created by <span style="color:white;">${pl.creator}</span> • ${playlistSongs.length} tracks</p>
                             </div>
                             <div style="display:flex; gap:12px;">
@@ -2206,7 +2275,6 @@ def play(filename):
     if not mime_type:
         mime_type = 'audio/flac' if filepath.lower().endswith('.flac') else 'audio/mpeg'
 
-    # Flask's send_file with conditional=True handles HTTP 206 Byte-Range natively and perfectly
     return send_file(filepath, mimetype=mime_type, conditional=True)
 
 @app.route('/download/<path:filename>')
