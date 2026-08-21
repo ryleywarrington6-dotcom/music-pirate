@@ -3,10 +3,43 @@
     "RW2012": {
       "password": "scrypt:32768:8:1$ImLhpLuXoLuFayKE$aca371ebf0c999a7345bc93446efa82b70dc2d0c743b6e71da6ed8d35da785921a55f4df43af3a7c9eb0be42465d18f861926378a3e05d289100aef048560abe",
       "is_admin": true,
+      "likes": [
+        "Mr Traumatik/00 - Mr Traumatik - Special Powers (feat. Devilman & Local) [Remix].flac"
+      ],
+      "dislikes": [
+        "Tyler The Creator/00 - Tyler, The Creator - She.flac",
+        "EMINEM/00 - Eminem - Love The Way You Lie.flac"
+      ],
+      "play_counts": {
+        "Mr Traumatik/00 - Mr Traumatik - Monster.flac": 1,
+        "Michael Jackson/00 - Michael Jackson - P.Y.T. (Pretty Young Thing).flac": 1,
+        "Tyler The Creator/00 - Tyler, The Creator - She.flac": 1,
+        "Mr Traumatik/00 - Tyler, The Creator - Boredom (feat. Rex Orange County & Anna of the North).flac": 1,
+        "EMINEM/00 - Eminem - Mockingbird.flac": 1,
+        "Linkin Park/00 - Linkin Park - Numb.flac": 1,
+        "Michael Jackson/00 - Michael Jackson - Billie Jean.flac": 1,
+        "Mr Traumatik/00 - Mr Traumatik - Lets get naughty.flac": 1,
+        "EMINEM/00 - Eminem - Love The Way You Lie.flac": 1,
+        "Michael Jackson/00 - Michael Jackson - The Lady in My Life.flac": 1,
+        "AzALI/00 - AzAli - CHAOS KING.flac": 1,
+        "Mr Traumatik/00 - Mr Traumatik - Special Powers (feat. Devilman & Local) [Remix].flac": 1
+      },
+      "bg_color": "#080808",
+      "pfp": "",
+      "friends": [],
+      "friend_requests": [],
+      "now_playing": {
+        "song": "Mr Traumatik/00 - Mr Traumatik - Special Powers (feat. Devilman & Local) [Remix].flac",
+        "time": 1787313130
+      }
+    },
+    "KK": {
+      "password": "scrypt:32768:8:1$s9gGVN1Io3t1HbyQ$e85e3fd2f7335343edbc5c54ab868b4616c4bf568cedec9642d667371841b9afd01e2032e933f19cd0973f366813c44da39bfc1ded0d80469b5d38b8906fc588",
+      "is_admin": false,
       "likes": [],
       "dislikes": [],
       "play_counts": {},
-      "bg_color": "#080808",
+      "bg_color": "#050505",
       "pfp": "",
       "friends": [],
       "friend_requests": []

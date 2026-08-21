@@ -38,7 +38,7 @@ DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
 CACHE_DIR = os.path.join(DATA_DIR, "Cache_Art")
 PROFILES_DIR = os.path.join(DATA_DIR, "Profiles")
 DB_FILE = os.path.join(DATA_DIR, 'database.json')
-METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v14.json') # Bumped to v14 to force fresh scan
+METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v14.json')
 VIDEO_CACHE_FILE = os.path.join(DATA_DIR, 'videos_v2.json')
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -158,8 +158,6 @@ def extract_audio_tags(full_path, rel_path):
                 artist = audio.get('artist', [None])[0] or audio.get('albumartist', [None])[0]
     except Exception: pass
 
-    # PRIORITIZE FOLDER STRUCTURE:
-    # If file is in ./Music/Tyler, The Creator/track.flac, use folder name as artist
     if folder_artist:
         artist = folder_artist
     else:
@@ -253,7 +251,6 @@ def generate_placeholder_cover(artist, title):
     brightness = (r * 299 + g * 587 + b * 114) / 1000
     text_color = "#111111" if brightness > 180 else "#ffffff"
 
-    # Derive clean initials directly from Artist Name
     clean_artist = re.sub(r'[^a-zA-Z0-9\s]', '', artist).strip()
     words = [w for w in clean_artist.split() if w]
     if len(words) >= 2:
@@ -454,12 +451,13 @@ HTML_TEMPLATE = """
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 24px; margin-bottom: 48px; }
         .scroll-row { display: flex; gap: 24px; overflow-x: auto; padding-bottom: 20px; margin-bottom: 40px; scroll-snap-type: x mandatory; }
         
-        /* Force strict width, min-width, and max-width on scroll row cards to stop stretching */
+        /* Fixed widths for scroll row cards */
         .scroll-row .card { width: 200px; min-width: 200px; max-width: 200px; flex-shrink: 0; scroll-snap-align: start; display: flex; flex-direction: column; }
         
         .card { background: var(--card-bg); backdrop-filter: blur(10px); padding: 18px; border-radius: 12px; cursor: pointer; transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); position: relative; text-align: left; border: 1px solid rgba(255,255,255,0.03); display: flex; flex-direction: column; }
         .card:hover { background: rgba(40,40,40,0.8); transform: translateY(-8px); box-shadow: 0 20px 40px rgba(0,0,0,0.5); border-color: rgba(255,255,255,0.1); }
         
+        /* Force perfect square images */
         .card-img-container { width: 100%; aspect-ratio: 1 / 1; background: #222; border-radius: 8px; margin-bottom: 16px; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 40px; color: #444; box-shadow: 0 8px 20px rgba(0,0,0,0.4); flex-shrink: 0; }
         .card-img-container img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; transition: transform 0.5s ease; }
         
@@ -544,50 +542,30 @@ HTML_TEMPLATE = """
         .chat-send-btn:hover { transform: scale(1.1); background: #1ed760; }
 
         /* ---------------------------------------------------------
-           MOBILE RESPONSIVE STYLING (@media max-width: 768px)
+           MOBILE RESPONSIVE STYLING
         --------------------------------------------------------- */
         @media (max-width: 768px) {
             body { flex-direction: column; overflow: auto; }
 
-            /* Mobile Bottom Navigation Bar */
             .sidebar {
-                position: fixed;
-                bottom: 88px;
-                left: 0;
-                right: 0;
-                width: 100%;
-                height: auto;
-                flex-direction: row;
-                justify-content: space-around;
-                align-items: center;
-                padding: 6px 8px;
-                background: rgba(10, 10, 10, 0.95);
-                backdrop-filter: blur(25px);
-                -webkit-backdrop-filter: blur(25px);
-                border-top: 1px solid rgba(255,255,255,0.08);
-                border-right: none;
-                z-index: 999;
-                gap: 0;
+                position: fixed; bottom: 88px; left: 0; right: 0; width: 100%; height: auto;
+                flex-direction: row; justify-content: space-around; align-items: center;
+                padding: 6px 8px; background: rgba(10, 10, 10, 0.95);
+                backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
+                border-top: 1px solid rgba(255,255,255,0.08); border-right: none;
+                z-index: 999; gap: 0;
             }
             .sidebar .logo, .sidebar .nav-section-title { display: none; }
-            .sidebar .nav-item {
-                flex-direction: column;
-                gap: 3px;
-                font-size: 10px;
-                padding: 6px 8px;
-                border-radius: 8px;
-            }
+            .sidebar .nav-item { flex-direction: column; gap: 3px; font-size: 10px; padding: 6px 8px; border-radius: 8px; }
             .sidebar .nav-item i { font-size: 16px; width: auto; }
             .sidebar .nav-item:hover, .sidebar .nav-item.active { transform: none; }
 
-            /* Main Content & Top Bar Mobile Adjustments */
-            .center-wrapper { margin-bottom: 160px; }
-            .top-bar { padding: 0 16px; height: 64px; }
+            .center-wrapper { margin-bottom: 160px; margin-right: 0; border-radius: 0; }
+            .top-bar { padding: 0 16px; height: 64px; border-radius: 0; }
             .search-container { width: 170px; padding: 8px 14px; }
             .search-container input { font-size: 13px; }
             .main-content { padding: 84px 16px 140px 16px; }
 
-            /* Grid & Card Mobile Touch Layout */
             h2 { font-size: 22px; margin-bottom: 16px; }
             .grid { grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); gap: 14px; margin-bottom: 32px; }
             .scroll-row { gap: 14px; padding-bottom: 12px; margin-bottom: 24px; }
@@ -597,11 +575,7 @@ HTML_TEMPLATE = """
             .card-artist { font-size: 12px; }
             .card-play-overlay { width: 38px; height: 38px; bottom: 8px; right: 8px; opacity: 1; transform: none; }
 
-            /* Player Bar Mobile Optimization */
-            .player-bar {
-                height: 88px;
-                padding: 0 16px;
-            }
+            .player-bar { height: 88px; padding: 0 16px; }
             .now-playing-info { width: 45%; gap: 10px; }
             .np-cover { width: 48px; height: 48px; border-radius: 6px; }
             .np-title { font-size: 13px; }
@@ -610,21 +584,14 @@ HTML_TEMPLATE = """
             .buttons { gap: 14px; }
             .btn { font-size: 16px; }
             .btn.play-btn { width: 34px; height: 34px; }
-            .volume-controls { display: none; } /* Hide volume & bass sliders on mobile */
+            .volume-controls { display: none; }
 
-            /* Right Panel Fullscreen Mobile Drawer */
             .right-panel {
-                position: fixed;
-                top: 0; left: 0; right: 0; bottom: 88px;
-                width: 100%; height: auto;
-                margin: 0;
-                z-index: 1001;
-                border-radius: 0;
-                background: rgba(10, 10, 10, 0.98);
-                padding: 20px 16px;
+                position: fixed; top: 0; left: 0; right: 0; bottom: 88px;
+                width: 100%; height: auto; margin: 0; z-index: 1001;
+                border-radius: 0; background: rgba(10, 10, 10, 0.98); padding: 20px 16px;
             }
 
-            /* Social Messaging Mobile Layout */
             .social-container { flex-direction: column; height: auto; }
             .social-sidebar { width: 100%; height: 250px; }
             .chat-area { width: 100%; height: 400px; }
@@ -874,7 +841,20 @@ HTML_TEMPLATE = """
         });
         
         bassBar.addEventListener('input', function() {
-            if(bassFilter) bassFilter.gain.value = this.value;
+            if(bassFilter && source && analyser) {
+                let val = parseFloat(this.value);
+                bassFilter.gain.value = val;
+                
+                // True bypass routing to guarantee clean audio when 0
+                source.disconnect();
+                bassFilter.disconnect();
+                if (val > 0) {
+                    source.connect(bassFilter);
+                    bassFilter.connect(analyser);
+                } else {
+                    source.connect(analyser);
+                }
+            }
             updateSliderFill(this);
         });
 
@@ -930,11 +910,19 @@ HTML_TEMPLATE = """
             bassFilter = audioCtx.createBiquadFilter();
             bassFilter.type = "lowshelf";
             bassFilter.frequency.value = 120; 
-            bassFilter.gain.value = bassBar.value;
+            
+            let initialGain = parseFloat(bassBar.value);
+            bassFilter.gain.value = initialGain;
 
             source = audioCtx.createMediaElementSource(audio);
-            source.connect(bassFilter);
-            bassFilter.connect(analyser);
+            
+            // Initial bypass routing
+            if (initialGain > 0) {
+                source.connect(bassFilter);
+                bassFilter.connect(analyser);
+            } else {
+                source.connect(analyser);
+            }
             analyser.connect(audioCtx.destination);
 
             const bufferLength = analyser.frequencyBinCount;
@@ -2266,6 +2254,7 @@ def play(filename):
     clean_filename = urllib.parse.unquote(filename).lstrip('/')
     filepath = os.path.normpath(os.path.join(MUSIC_DIR, clean_filename))
     
+    # Security check to prevent directory traversal out of MUSIC_DIR
     if not filepath.startswith(MUSIC_DIR):
         return "Unauthorized", 403
 
