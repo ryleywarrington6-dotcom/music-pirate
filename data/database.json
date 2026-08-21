@@ -1,0 +1,17 @@
+{
+  "users": {
+    "RW2012": {
+      "password": "scrypt:32768:8:1$ImLhpLuXoLuFayKE$aca371ebf0c999a7345bc93446efa82b70dc2d0c743b6e71da6ed8d35da785921a55f4df43af3a7c9eb0be42465d18f861926378a3e05d289100aef048560abe",
+      "is_admin": true,
+      "likes": [],
+      "dislikes": [],
+      "play_counts": {},
+      "bg_color": "#080808",
+      "pfp": "",
+      "friends": [],
+      "friend_requests": []
+    }
+  },
+  "playlists": {},
+  "messages": {}
+}

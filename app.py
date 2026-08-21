@@ -38,7 +38,7 @@ DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
 CACHE_DIR = os.path.join(DATA_DIR, "Cache_Art")
 PROFILES_DIR = os.path.join(DATA_DIR, "Profiles")
 DB_FILE = os.path.join(DATA_DIR, 'database.json')
-METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v13.json')
+METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v14.json') # Bumped to v14 to force fresh scan
 VIDEO_CACHE_FILE = os.path.join(DATA_DIR, 'videos_v2.json')
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -137,47 +137,38 @@ def parse_folder_and_filename(rel_path):
 
 def normalize_artist(raw_artist):
     if not raw_artist: return "Unknown Artist"
-    # FIX: Do not split on commas (,) so names like "Tyler, The Creator" are preserved completely
     cleaned = re.split(r'\s*(?:;|feat\.?|ft\.?|with)\s*', raw_artist, flags=re.IGNORECASE)[0]
     return cleaned.strip() or "Unknown Artist"
 
 def extract_audio_tags(full_path, rel_path):
+    parts = rel_path.split('/')
+    folder_artist = parts[0] if len(parts) > 1 else None
+
     artist, title = None, None
     try:
         audio = mutagen.File(full_path)
         if audio is not None:
             if hasattr(audio, 'tags') and audio.tags:
-                if 'TPE1' in audio.tags: artist = str(audio.tags['TPE1'])
-                elif 'TPE2' in audio.tags: artist = str(audio.tags['TPE2'])
                 if 'TIT2' in audio.tags: title = str(audio.tags['TIT2'])
+                if 'TPE1' in audio.tags: artist = str(audio.tags['TPE1'])
 
-            if not artist and hasattr(audio, 'get'):
-                artist = audio.get('artist', [None])[0] or audio.get('albumartist', [None])[0]
             if not title and hasattr(audio, 'get'):
                 title = audio.get('title', [None])[0]
-
-            if not artist:
-                if 'artist' in audio:
-                    val = audio['artist']
-                    artist = val[0] if isinstance(val, list) else str(val)
-                elif 'albumartist' in audio:
-                    val = audio['albumartist']
-                    artist = val[0] if isinstance(val, list) else str(val)
-
-            if not title:
-                if 'title' in audio:
-                    val = audio['title']
-                    title = val[0] if isinstance(val, list) else str(val)
+            if not artist and hasattr(audio, 'get'):
+                artist = audio.get('artist', [None])[0] or audio.get('albumartist', [None])[0]
     except Exception: pass
 
-    folder_artist, fallback_title = parse_folder_and_filename(rel_path)
-    artist = artist or folder_artist
-    title = title or fallback_title
+    # PRIORITIZE FOLDER STRUCTURE:
+    # If file is in ./Music/Tyler, The Creator/track.flac, use folder name as artist
+    if folder_artist:
+        artist = folder_artist
+    else:
+        artist = normalize_artist(artist or "Unknown Artist")
 
-    artist = normalize_artist(artist)
-    title = title.strip() if title else os.path.splitext(os.path.basename(rel_path))[0]
+    fallback_folder, fallback_title = parse_folder_and_filename(rel_path)
+    title = str(title or fallback_title or os.path.splitext(os.path.basename(rel_path))[0]).strip()
 
-    return artist, title
+    return artist.strip(), title
 
 def get_song_metadata(rel_path):
     full_path = os.path.join(MUSIC_DIR, rel_path)
@@ -262,12 +253,17 @@ def generate_placeholder_cover(artist, title):
     brightness = (r * 299 + g * 587 + b * 114) / 1000
     text_color = "#111111" if brightness > 180 else "#ffffff"
 
-    initials = ""
-    for word in (artist + " " + title).split():
-        if word and word[0].isalnum():
-            initials += word[0].upper()
-            if len(initials) >= 2: break
-    if not initials: initials = "♪"
+    # Derive clean initials directly from Artist Name
+    clean_artist = re.sub(r'[^a-zA-Z0-9\s]', '', artist).strip()
+    words = [w for w in clean_artist.split() if w]
+    if len(words) >= 2:
+        initials = (words[0][0] + words[1][0]).upper()
+    elif len(words) == 1 and len(words[0]) >= 2:
+        initials = words[0][:2].upper()
+    elif len(words) == 1:
+        initials = words[0][0].upper()
+    else:
+        initials = "♪"
 
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 500 500">
         <rect width="500" height="500" fill="{bg_color}"/>
@@ -1221,6 +1217,12 @@ HTML_TEMPLATE = """
         function switchView(view, el=null) {
             document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
             if(el) el.classList.add('active');
+            else {
+                let idx = ['home', 'search', 'artists', 'playlists', 'radio', 'messages', 'settings'].indexOf(view);
+                if (idx !== -1) {
+                    let items = document.querySelectorAll('.nav-item');
+                }
+            }
             
             document.getElementById('global-search').value = '';
             
@@ -2264,7 +2266,6 @@ def play(filename):
     clean_filename = urllib.parse.unquote(filename).lstrip('/')
     filepath = os.path.normpath(os.path.join(MUSIC_DIR, clean_filename))
     
-    # Security check to prevent directory traversal out of MUSIC_DIR
     if not filepath.startswith(MUSIC_DIR):
         return "Unauthorized", 403
 
