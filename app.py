@@ -453,17 +453,23 @@ HTML_TEMPLATE = """
         h2 { font-size: 32px; font-weight: 800; margin-top: 0; margin-bottom: 28px; letter-spacing: -1px; }
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 24px; margin-bottom: 48px; }
         .scroll-row { display: flex; gap: 24px; overflow-x: auto; padding-bottom: 20px; margin-bottom: 40px; scroll-snap-type: x mandatory; }
-        .scroll-row .card { min-width: 200px; flex-shrink: 0; scroll-snap-align: start; }
         
-        .card { background: var(--card-bg); backdrop-filter: blur(10px); padding: 18px; border-radius: 12px; cursor: pointer; transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); position: relative; text-align: left; border: 1px solid rgba(255,255,255,0.03); }
+        /* FIXED: Force strict width, min-width, and max-width on scroll row cards to stop stretching */
+        .scroll-row .card { width: 200px; min-width: 200px; max-width: 200px; flex-shrink: 0; scroll-snap-align: start; display: flex; flex-direction: column; }
+        
+        /* FIXED: Set flex-direction column on base card */
+        .card { background: var(--card-bg); backdrop-filter: blur(10px); padding: 18px; border-radius: 12px; cursor: pointer; transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); position: relative; text-align: left; border: 1px solid rgba(255,255,255,0.03); display: flex; flex-direction: column; }
         .card:hover { background: rgba(40,40,40,0.8); transform: translateY(-8px); box-shadow: 0 20px 40px rgba(0,0,0,0.5); border-color: rgba(255,255,255,0.1); }
-        .card-img-container { width: 100%; aspect-ratio: 1; background: #222; border-radius: 8px; margin-bottom: 16px; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 40px; color: #444; box-shadow: 0 8px 20px rgba(0,0,0,0.4); }
+        
+        /* FIXED: Force perfect square with flex-shrink: 0 and aspect-ratio: 1/1 */
+        .card-img-container { width: 100%; aspect-ratio: 1 / 1; background: #222; border-radius: 8px; margin-bottom: 16px; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 40px; color: #444; box-shadow: 0 8px 20px rgba(0,0,0,0.4); flex-shrink: 0; }
         .card-img-container img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; transition: transform 0.5s ease; }
+        
         .card:hover .card-img-container img { transform: scale(1.05); }
         .card-play-overlay { position: absolute; bottom: 12px; right: 12px; background: var(--accent); color: #000; width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; opacity: 0; transform: translateY(15px); transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 10px 20px rgba(0,0,0,0.6); z-index: 2;}
         .card:hover .card-play-overlay { opacity: 1; transform: translateY(0); }
         .card-play-overlay:hover { transform: scale(1.15) !important; background: #1ed760; }
-        .card-info { display: flex; flex-direction: column; gap: 6px; }
+        .card-info { display: flex; flex-direction: column; gap: 6px; width: 100%; }
         .card-title { font-weight: 800; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.2px; }
         .card-bottom-row { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
         .card-artist { font-weight: 500; color: var(--subtext); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; padding-right: 8px; }
