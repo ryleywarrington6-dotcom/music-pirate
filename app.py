@@ -38,7 +38,7 @@ DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
 CACHE_DIR = os.path.join(DATA_DIR, "Cache_Art")
 PROFILES_DIR = os.path.join(DATA_DIR, "Profiles")
 DB_FILE = os.path.join(DATA_DIR, 'database.json')
-METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v14.json')
+METADATA_FILE = os.path.join(DATA_DIR, 'metadata_v15.json') # Bumped to v15 for Genre extraction
 VIDEO_CACHE_FILE = os.path.join(DATA_DIR, 'videos_v2.json')
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -144,18 +144,21 @@ def extract_audio_tags(full_path, rel_path):
     parts = rel_path.split('/')
     folder_artist = parts[0] if len(parts) > 1 else None
 
-    artist, title = None, None
+    artist, title, genre = None, None, None
     try:
         audio = mutagen.File(full_path)
         if audio is not None:
             if hasattr(audio, 'tags') and audio.tags:
                 if 'TIT2' in audio.tags: title = str(audio.tags['TIT2'])
                 if 'TPE1' in audio.tags: artist = str(audio.tags['TPE1'])
+                if 'TCON' in audio.tags: genre = str(audio.tags['TCON'])
 
             if not title and hasattr(audio, 'get'):
                 title = audio.get('title', [None])[0]
             if not artist and hasattr(audio, 'get'):
                 artist = audio.get('artist', [None])[0] or audio.get('albumartist', [None])[0]
+            if not genre and hasattr(audio, 'get'):
+                genre = audio.get('genre', [None])[0]
     except Exception: pass
 
     if folder_artist:
@@ -165,8 +168,9 @@ def extract_audio_tags(full_path, rel_path):
 
     fallback_folder, fallback_title = parse_folder_and_filename(rel_path)
     title = str(title or fallback_title or os.path.splitext(os.path.basename(rel_path))[0]).strip()
+    genre = str(genre or "Unknown Genre").strip()
 
-    return artist.strip(), title
+    return artist.strip(), title, genre
 
 def get_song_metadata(rel_path):
     full_path = os.path.join(MUSIC_DIR, rel_path)
@@ -176,12 +180,13 @@ def get_song_metadata(rel_path):
         if meta_cache[rel_path].get('mtime') == mtime:
             return meta_cache[rel_path]
 
-    artist, title = extract_audio_tags(full_path, rel_path)
+    artist, title, genre = extract_audio_tags(full_path, rel_path)
 
     meta_cache[rel_path] = {
         "filename": rel_path,
         "artist": artist,
         "title": title,
+        "genre": genre,
         "has_cover": has_embedded_art(full_path),
         "mtime": mtime
     }
@@ -206,6 +211,7 @@ def get_aggregated_stats():
             if song in stats: stats[song]["plays"] += count
     return stats
 
+# --- PERSONALIZED INFINITE RADIO ALGORITHM ---
 def get_radio_recommendation(username, history_list=None, current_artist=None):
     db = load_db()
     user = db["users"].get(username, {})
@@ -217,16 +223,58 @@ def get_radio_recommendation(username, history_list=None, current_artist=None):
     history_list = history_list or []
     history_set = set(history_list)
 
+    # 1. Filter out disliked tracks and tracks played recently in this session
     valid_songs = [s for s in all_files if s not in dislikes and s not in history_set]
     if not valid_songs: valid_songs = [s for s in all_files if s not in dislikes]
     if not valid_songs: return get_song_metadata(random.choice(all_files)) if all_files else None
 
+    # 2. Extract recent vibe profile (Last 3 played tracks in session)
+    recent_genres = set()
+    recent_artists = set()
+    if current_artist:
+        recent_artists.add(current_artist.lower())
+
+    for song_filename in history_list[-3:]:
+        m = meta_cache.get(song_filename)
+        if m:
+            if m.get('artist'): recent_artists.add(m['artist'].lower())
+            if m.get('genre') and m['genre'] != 'Unknown Genre': recent_genres.add(m['genre'].lower())
+
+    # 3. Build overall user preference profile
+    user_top_artists = set()
+    user_top_genres = set()
+    for song_filename in likes:
+        m = meta_cache.get(song_filename)
+        if m:
+            if m.get('artist'): user_top_artists.add(m['artist'].lower())
+            if m.get('genre') and m['genre'] != 'Unknown Genre': user_top_genres.add(m['genre'].lower())
+
+    # 4. Score candidates
     weights = []
     for song in valid_songs:
         meta = get_song_metadata(song)
-        weight = 20.0
-        if song in likes: weight += 30.0
+        weight = 15.0 # Base weight
 
+        song_artist_lower = meta['artist'].lower()
+        song_genre_lower = meta.get('genre', 'Unknown Genre').lower()
+
+        # Boost if explicit Like
+        if song in likes: 
+            weight += 35.0
+
+        # Boost for Vibe Flow (Genre/Artist matches recent history)
+        if song_artist_lower in recent_artists:
+            weight += 25.0
+        if song_genre_lower != 'unknown genre' and song_genre_lower in recent_genres:
+            weight += 30.0
+
+        # Boost for User Favorites (Overall profile)
+        if song_artist_lower in user_top_artists:
+            weight += 15.0
+        if song_genre_lower != 'unknown genre' and song_genre_lower in user_top_genres:
+            weight += 20.0
+
+        # Discovery / Unplayed Boost & Overplay Penalty
         plays = play_counts.get(song, 0)
         if plays == 0:
             weight += 15.0 
@@ -235,10 +283,8 @@ def get_radio_recommendation(username, history_list=None, current_artist=None):
             if song in likes: penalty *= 0.5 
             weight = max(5.0, weight - penalty)
 
-        if current_artist and meta['artist'].lower() == current_artist.lower():
-            weight += 25.0
-
-        weight *= random.uniform(0.8, 1.2)
+        # Random entropy for fresh variation
+        weight *= random.uniform(0.85, 1.25)
         weights.append(weight)
 
     recommended_filename = random.choices(valid_songs, weights=weights, k=1)[0]
@@ -845,7 +891,6 @@ HTML_TEMPLATE = """
                 let val = parseFloat(this.value);
                 bassFilter.gain.value = val;
                 
-                // True bypass routing to guarantee clean audio when 0
                 source.disconnect();
                 bassFilter.disconnect();
                 if (val > 0) {
@@ -916,7 +961,6 @@ HTML_TEMPLATE = """
 
             source = audioCtx.createMediaElementSource(audio);
             
-            // Initial bypass routing
             if (initialGain > 0) {
                 source.connect(bassFilter);
                 bassFilter.connect(analyser);
@@ -2254,7 +2298,6 @@ def play(filename):
     clean_filename = urllib.parse.unquote(filename).lstrip('/')
     filepath = os.path.normpath(os.path.join(MUSIC_DIR, clean_filename))
     
-    # Security check to prevent directory traversal out of MUSIC_DIR
     if not filepath.startswith(MUSIC_DIR):
         return "Unauthorized", 403
 
