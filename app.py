@@ -11,6 +11,8 @@ import urllib.request
 import urllib.parse
 import atexit
 import mimetypes
+import subprocess
+import shutil
 from flask import Flask, request, session, redirect, url_for, render_template_string, jsonify, send_from_directory, Response, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -49,6 +51,18 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(32).hex())
 
 # ---------------------------------------------------------
+# CORS - allow requests from monochrome.tf (for userscript)
+# ---------------------------------------------------------
+@app.after_request
+def after_request(response):
+    origin = request.headers.get('Origin')
+    if origin and origin.startswith('https://monochrome.tf'):
+        response.headers.add('Access-Control-Allow-Origin', origin)
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    return response
+
+# ---------------------------------------------------------
 # DATABASE & CACHE HELPERS
 # ---------------------------------------------------------
 def load_json_file(filepath, default_data):
@@ -80,6 +94,9 @@ def _save_meta_cache():
         _meta_cache_dirty = False
 
 atexit.register(_save_meta_cache)
+
+# In-memory cache for captured Monochrome streams (per user)
+mono_captures = {}  # session_id -> list of dicts
 
 def get_all_filepaths():
     audio_files = []
@@ -248,6 +265,7 @@ def get_radio_recommendation(username, history_list=None, current_artist=None):
     for song in valid_songs:
         meta = get_song_metadata(song)
         weight = 15.0
+
         song_artist_lower = meta['artist'].lower()
         song_genre_lower = meta.get('genre', 'Unknown Genre').lower()
 
@@ -330,7 +348,45 @@ def search_youtube_video(artist, song):
     return None
 
 # ---------------------------------------------------------
-# HIGH-END HTML & UI TEMPLATES
+# MONOCHROME INTEGRATION HELPERS
+# ---------------------------------------------------------
+def fetch_monochrome_track(track_url):
+    """
+    Given a Monochrome track URL (e.g., https://monochrome.tf/track/123),
+    fetch the API to extract the stream URL and decryption key.
+    Returns dict with 'stream_url', 'decryption_key', 'artist', 'title' or None if error.
+    """
+    match = re.search(r'/track/([^/?]+)', track_url)
+    if not match:
+        return None
+    track_id = match.group(1)
+    api_url = f"https://monochrome.tf/api/v2/track/{track_id}"
+    try:
+        req = urllib.request.Request(api_url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Origin': 'https://monochrome.tf',
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            stream = data.get('playback', [{}])[0]
+            if not stream or not stream.get('url') or not stream.get('encryption', {}).get('key', {}).get('value'):
+                return None
+            return {
+                'stream_url': stream['url'],
+                'decryption_key': stream['encryption']['key']['value'],
+                'artist': data.get('track', {}).get('artists', ['Unknown Artist'])[0],
+                'title': data.get('track', {}).get('title', 'Unknown Track')
+            }
+    except Exception as e:
+        print(f"Monochrome fetch error: {e}")
+        return None
+
+def is_ffmpeg_available():
+    return shutil.which('ffmpeg') is not None
+
+# ---------------------------------------------------------
+# HIGH-END HTML & UI TEMPLATES WITH MOBILE RESPONSIVENESS
 # ---------------------------------------------------------
 LOGIN_TEMPLATE = """
 <!DOCTYPE html>
@@ -347,14 +403,46 @@ LOGIN_TEMPLATE = """
             50% { background-position: 100% 50%; }
             100% { background-position: 0% 50%; }
         }
-        body { font-family: 'Outfit', sans-serif; margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(-45deg, #050505, #1a1a2e, #0a1913, #050505); background-size: 400% 400%; animation: gradientBG 15s ease infinite; color: white; padding: 20px; box-sizing: border-box; }
-        .auth-card { background: rgba(20, 20, 20, 0.4); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); padding: 45px 40px; border-radius: 20px; text-align: center; width: 100%; max-width: 360px; border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 25px 50px rgba(0,0,0,0.6); }
+        body { 
+            font-family: 'Outfit', sans-serif; 
+            margin: 0; 
+            height: 100vh; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            background: linear-gradient(-45deg, #050505, #1a1a2e, #0a1913, #050505);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+            color: white; 
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .auth-card { 
+            background: rgba(20, 20, 20, 0.4); 
+            backdrop-filter: blur(24px); 
+            -webkit-backdrop-filter: blur(24px);
+            padding: 45px 40px; 
+            border-radius: 20px; 
+            text-align: center; 
+            width: 100%;
+            max-width: 360px; 
+            border: 1px solid rgba(255,255,255,0.05); 
+            box-shadow: 0 25px 50px rgba(0,0,0,0.6); 
+        }
         h2 { margin-top:0; font-weight: 700; font-size: 28px; letter-spacing: -0.5px; }
         .input-group { text-align: left; margin-bottom: 16px; }
         .input-label { font-size: 13px; color: #a7a7a7; margin-bottom: 6px; font-weight: 500; text-transform: uppercase; letter-spacing: 1px; }
-        input { width: 100%; padding: 14px 16px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; box-sizing: border-box; transition: all 0.3s ease; font-family: 'Outfit', sans-serif; }
+        input { 
+            width: 100%; padding: 14px 16px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); 
+            background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; 
+            box-sizing: border-box; transition: all 0.3s ease; font-family: 'Outfit', sans-serif;
+        }
         input:focus { border-color: var(--accent); background: rgba(0,0,0,0.5); box-shadow: 0 0 15px rgba(29, 185, 84, 0.15); }
-        button { background: var(--accent); color: black; border: none; padding: 14px 24px; border-radius: 30px; font-weight: 700; font-size: 16px; cursor: pointer; width: 100%; margin-top: 15px; transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); font-family: 'Outfit', sans-serif; }
+        button { 
+            background: var(--accent); color: black; border: none; padding: 14px 24px; border-radius: 30px; 
+            font-weight: 700; font-size: 16px; cursor: pointer; width: 100%; margin-top: 15px; 
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); font-family: 'Outfit', sans-serif;
+        }
         button:hover { background: #1ed760; transform: translateY(-3px); box-shadow: 0 10px 20px rgba(29, 185, 84, 0.3); }
     </style>
 </head>
@@ -454,12 +542,17 @@ HTML_TEMPLATE = """
         h2 { font-size: 32px; font-weight: 800; margin-top: 0; margin-bottom: 28px; letter-spacing: -1px; }
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 24px; margin-bottom: 48px; }
         .scroll-row { display: flex; gap: 24px; overflow-x: auto; padding-bottom: 20px; margin-bottom: 40px; scroll-snap-type: x mandatory; }
+        
+        /* Force strict width, min-width, and max-width on scroll row cards */
         .scroll-row .card { width: 200px; min-width: 200px; max-width: 200px; flex-shrink: 0; scroll-snap-align: start; display: flex; flex-direction: column; }
         
         .card { background: var(--card-bg); backdrop-filter: blur(10px); padding: 18px; border-radius: 12px; cursor: pointer; transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); position: relative; text-align: left; border: 1px solid rgba(255,255,255,0.03); display: flex; flex-direction: column; }
         .card:hover { background: rgba(40,40,40,0.8); transform: translateY(-8px); box-shadow: 0 20px 40px rgba(0,0,0,0.5); border-color: rgba(255,255,255,0.1); }
+        
+        /* Force perfect square images */
         .card-img-container { width: 100%; aspect-ratio: 1 / 1; background: #222; border-radius: 8px; margin-bottom: 16px; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 40px; color: #444; box-shadow: 0 8px 20px rgba(0,0,0,0.4); flex-shrink: 0; }
         .card-img-container img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; transition: transform 0.5s ease; }
+        
         .card:hover .card-img-container img { transform: scale(1.05); }
         .card-play-overlay { position: absolute; bottom: 12px; right: 12px; background: var(--accent); color: #000; width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; opacity: 0; transform: translateY(15px); transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 10px 20px rgba(0,0,0,0.6); z-index: 2;}
         .card:hover .card-play-overlay { opacity: 1; transform: translateY(0); }
@@ -540,6 +633,9 @@ HTML_TEMPLATE = """
         .chat-send-btn { background: var(--accent); color: black; border: none; width: 50px; height: 50px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; transition: 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); box-shadow: 0 5px 15px rgba(29, 185, 84, 0.3); }
         .chat-send-btn:hover { transform: scale(1.1); background: #1ed760; }
 
+        /* ---------------------------------------------------------
+           MOBILE RESPONSIVE STYLING
+        --------------------------------------------------------- */
         @media (max-width: 768px) {
             body { flex-direction: column; overflow: auto; }
             .sidebar { position: fixed; bottom: 88px; left: 0; right: 0; width: 100%; height: auto; flex-direction: row; justify-content: space-around; align-items: center; padding: 6px 8px; background: rgba(10, 10, 10, 0.95); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px); border-top: 1px solid rgba(255,255,255,0.08); border-right: none; z-index: 999; gap: 0; }
@@ -574,11 +670,21 @@ HTML_TEMPLATE = """
             .right-panel { position: fixed; top: 100vh; left: 0; right: 0; bottom: auto; width: 100%; height: calc(100vh - 88px); margin: 0; z-index: 1001; border-radius: 0; background: rgba(10, 10, 10, 0.98); padding: 20px 16px; transition: top 0.4s cubic-bezier(0.16, 1, 0.3, 1); display: flex !important; }
             .right-panel.mobile-active { top: 0; }
             .mobile-close-btn { display: flex !important; align-items: center; justify-content: center; }
-
-            .mini-player { bottom: 100px !important; right: 16px !important; width: 280px !important; }
         }
 
-        @keyframes radioPulse { 0% { transform: scale(0.95); opacity: 0.3; } 100% { transform: scale(1.15); opacity: 0.6; } }
+        .eq-container { display: flex; align-items: flex-end; gap: 4px; height: 18px; }
+        .eq-bar { width: 4px; background: var(--accent); border-radius: 2px; animation: eqbounce 1s infinite ease-in-out; box-shadow: 0 0 8px rgba(29, 185, 84, 0.5);}
+        .eq-bar:nth-child(1) { height: 40%; animation-delay: 0s; }
+        .eq-bar:nth-child(2) { height: 70%; animation-delay: 0.2s; }
+        .eq-bar:nth-child(3) { height: 50%; animation-delay: 0.4s; }
+        .eq-container.paused .eq-bar { animation-play-state: paused; height: 20% !important; transition: height 0.3s ease; box-shadow: none;}
+        @keyframes eqbounce { 0%, 100% { transform: scaleY(0.6); } 50% { transform: scaleY(1.0); } }
+
+        /* Monochrome specific styles */
+        .mono-result { background: rgba(0,0,0,0.3); border-radius: 12px; padding: 20px; margin-top: 16px; border: 1px solid rgba(255,255,255,0.05); }
+        .mono-command { background: #0a0a0a; padding: 16px; border-radius: 8px; font-family: monospace; font-size: 14px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; border: 1px solid #333; margin: 12px 0; }
+        .mono-btn-group { display: flex; gap: 12px; flex-wrap: wrap; }
+        .captured-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: rgba(0,0,0,0.2); border-radius: 8px; margin-bottom: 8px; border-left: 3px solid var(--accent); }
     </style>
 </head>
 <body>
@@ -619,6 +725,9 @@ HTML_TEMPLATE = """
         
         <div class="nav-section-title" style="margin-top: 24px;">Social</div>
         <div class="nav-item" onclick="switchView('messages', this)"><i class="fas fa-comment-alt"></i> <span>Messages</span></div>
+
+        <div class="nav-section-title" style="margin-top: 24px;">Advanced</div>
+        <div class="nav-item" onclick="switchView('monochrome', this)"><i class="fas fa-cloud-download-alt"></i> <span>Monochrome</span></div>
 
         <div class="nav-section-title" style="margin-top: 24px;">General</div>
         <div class="nav-item" onclick="switchView('settings', this)"><i class="fas fa-cog"></i> <span>Settings</span></div>
@@ -661,6 +770,7 @@ HTML_TEMPLATE = """
             </div>
         </div>
         
+        <!-- COVER ART DISPLAY ALWAYS VISIBLE -->
         <div class="rp-media-container">
             <div class="rp-cover-glow" id="rp-cover-glow"></div>
             <img id="rp-cover" src="" alt="">
@@ -712,7 +822,7 @@ HTML_TEMPLATE = """
         </div>
         
         <div class="volume-controls">
-            <button class="btn" id="mini-player-btn" onclick="toggleMiniPlayer()" title="Mini Player (Video)" style="margin-right:20px; font-size:16px; transition:0.2s;"><i class="fas fa-window-restore"></i></button>
+            <button class="btn" id="mini-player-btn" onclick="toggleMiniPlayer()" title="Mini Player (Video)" style="margin-right:20px; font-size:16px; transition:0.2s;"><i class="fas fa-external-link-alt"></i></button>
             <a id="download-btn" href="#" download style="color:var(--subtext); margin-right:20px; display:none; font-size: 16px; transition: 0.2s;" title="Download Track"><i class="fas fa-download"></i></a>
             <button class="btn" id="dislike-btn" onclick="sendFeedback('dislike')" title="Dislike"><i class="fas fa-thumbs-down"></i></button>
             <button class="btn" id="like-btn" onclick="sendFeedback('like')" style="margin-right:15px;" title="Like"><i class="fas fa-heart"></i></button>
@@ -786,15 +896,95 @@ HTML_TEMPLATE = """
         updateSliderFill(volumeBar);
         updateSliderFill(bassBar);
 
-        // --- MINI PLAYER PIP DRAG LOGIC ---
+        // --- OUT-OF-BROWSER PIP LOGIC ---
         let isMiniPlayerOpen = false;
+        let pipWindow = null;
         const miniPlayer = document.getElementById('mini-player');
         const mpDragHandle = document.getElementById('mp-drag-handle');
         const mpBtn = document.getElementById('mini-player-btn');
         let isDraggingMP = false;
         let mpOffsetX = 0, mpOffsetY = 0;
 
-        function toggleMiniPlayer() {
+        async function toggleMiniPlayer() {
+            if ('documentPictureInPicture' in window) {
+                if (pipWindow) {
+                    pipWindow.close();
+                    return;
+                }
+                try {
+                    pipWindow = await documentPictureInPicture.requestWindow({
+                        width: 360,
+                        height: 280
+                    });
+
+                    pipWindow.document.head.innerHTML = `
+                        <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+                        <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+                    `;
+                    [...document.styleSheets].forEach((sheet) => {
+                        try {
+                            if (sheet.href) {
+                                const link = document.createElement('link');
+                                link.rel = 'stylesheet';
+                                link.href = sheet.href;
+                                pipWindow.document.head.appendChild(link);
+                            } else {
+                                const cssRules = [...sheet.cssRules].map(r => r.cssText).join('');
+                                const style = document.createElement('style');
+                                style.textContent = cssRules;
+                                pipWindow.document.head.appendChild(style);
+                            }
+                        } catch (e) {
+                            if (sheet.href) {
+                                const link = document.createElement('link');
+                                link.rel = 'stylesheet';
+                                link.href = sheet.href;
+                                pipWindow.document.head.appendChild(link);
+                            }
+                        }
+                    });
+                    
+                    pipWindow.document.body.style.margin = '0';
+                    pipWindow.document.body.style.background = '#050505';
+
+                    miniPlayer.style.display = 'flex';
+                    miniPlayer.style.position = 'relative';
+                    miniPlayer.style.inset = 'auto';
+                    miniPlayer.style.width = '100%';
+                    miniPlayer.style.height = '100vh';
+                    miniPlayer.style.border = 'none';
+                    miniPlayer.style.borderRadius = '0';
+                    mpDragHandle.style.display = 'none';
+                    mpBtn.classList.add('active');
+
+                    pipWindow.document.body.appendChild(miniPlayer);
+
+                    pipWindow.addEventListener('pagehide', () => {
+                        document.body.appendChild(miniPlayer);
+                        miniPlayer.style.display = 'none';
+                        miniPlayer.style.position = 'fixed';
+                        miniPlayer.style.bottom = '120px';
+                        miniPlayer.style.right = '32px';
+                        miniPlayer.style.width = '340px';
+                        miniPlayer.style.height = 'auto';
+                        miniPlayer.style.borderRadius = '16px';
+                        miniPlayer.style.border = '1px solid rgba(255,255,255,0.1)';
+                        mpDragHandle.style.display = 'flex';
+                        mpBtn.classList.remove('active');
+                        pipWindow = null;
+                        isMiniPlayerOpen = false;
+                    });
+                    isMiniPlayerOpen = true;
+                    return;
+                } catch (error) {
+                    console.warn('Document PiP failed. Falling back to floating player.', error);
+                }
+            }
+            
+            toggleInDOMMiniPlayer();
+        }
+
+        function toggleInDOMMiniPlayer() {
             isMiniPlayerOpen = !isMiniPlayerOpen;
             if(isMiniPlayerOpen) {
                 miniPlayer.style.display = 'flex';
@@ -806,7 +996,7 @@ HTML_TEMPLATE = """
         }
 
         mpDragHandle.addEventListener('mousedown', (e) => {
-            if(e.target.tagName === 'I') return;
+            if(e.target.tagName === 'I' || pipWindow) return;
             isDraggingMP = true;
             miniPlayer.style.transition = 'none';
             const rect = miniPlayer.getBoundingClientRect();
@@ -1252,9 +1442,10 @@ HTML_TEMPLATE = """
             document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
             if(el) el.classList.add('active');
             else {
-                let idx = ['home', 'search', 'artists', 'playlists', 'radio', 'messages', 'settings'].indexOf(view);
+                let idx = ['home', 'search', 'artists', 'playlists', 'radio', 'messages', 'monochrome', 'settings'].indexOf(view);
                 if (idx !== -1) {
                     let items = document.querySelectorAll('.nav-item');
+                    // we'll just let the switch handle it
                 }
             }
             
@@ -1277,6 +1468,7 @@ HTML_TEMPLATE = """
                     updateRadioUI();
                 }
             }
+            if (view === 'monochrome') renderMonochrome();
             if (view === 'settings') renderSettings();
         }
 
@@ -1964,6 +2156,195 @@ HTML_TEMPLATE = """
             }).then(() => loadChatHistory());
         }
 
+        // ---------------------------------------------------------
+        // MONOCHROME VIEW
+        // ---------------------------------------------------------
+        function renderMonochrome() {
+            // Fetch captured streams for the current user (if any)
+            fetch('/api/monochrome/captured')
+                .then(res => res.json())
+                .then(captured => {
+                    let capturedHtml = '';
+                    if (captured && captured.length > 0) {
+                        capturedHtml = '<div style="margin: 20px 0 10px 0; font-weight: 700; font-size: 18px; color: var(--accent);">📦 Captured Streams</div>';
+                        captured.forEach((item, idx) => {
+                            const cmd = `ffplay -decryption_key ${item.decryption_key} -i "${item.stream_url}" -nodisp -autoexit`;
+                            capturedHtml += `
+                            <div class="captured-item">
+                                <div>
+                                    <div style="font-weight: 700;">${item.title}</div>
+                                    <div style="font-size: 13px; color: var(--subtext);">${item.artist}</div>
+                                </div>
+                                <div style="display: flex; gap: 8px;">
+                                    <button class="action-btn" style="background: var(--accent); color: black; padding: 4px 10px;" onclick="playMonochromeStream('${item.stream_url}', '${item.decryption_key}')"><i class="fas fa-play"></i></button>
+                                    <button class="action-btn" style="background: #f59e0b; padding: 4px 10px;" onclick="copyMonoCommandFromData('${cmd.replace(/'/g, "\\'")}')"><i class="fas fa-copy"></i></button>
+                                </div>
+                            </div>
+                            `;
+                        });
+                    }
+
+                    contentDiv.innerHTML = `
+                        <div class="fade-in" style="max-width: 700px; margin: 0 auto;">
+                            <h2 style="font-size: 32px; display: flex; align-items: center; gap: 12px;">
+                                <i class="fas fa-cloud-download-alt" style="color: var(--accent);"></i> Monochrome Stream Interceptor
+                            </h2>
+                            <p style="color: var(--subtext); margin-bottom: 24px; font-weight: 500;">
+                                Enter a Monochrome track URL to retrieve the decryption key and stream URL.
+                                The command will be displayed below; you can copy it to use with FFplay or play it directly in this app (requires FFmpeg installed on server).
+                            </p>
+
+                            <div style="display: flex; gap: 12px; margin-bottom: 20px;">
+                                <input type="text" id="mono-url-input" placeholder="e.g. https://monochrome.tf/track/abc123" style="flex: 1; padding: 14px 20px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; font-family: 'Outfit', sans-serif;">
+                                <button class="action-btn" style="background: var(--accent); color: black; padding: 14px 28px; font-weight: 800; border-radius: 30px; box-shadow: 0 5px 15px rgba(29,185,84,0.3);" onclick="fetchMonochrome()">
+                                    <i class="fas fa-search"></i> Fetch
+                                </button>
+                            </div>
+
+                            <div id="mono-result" style="display: none;">
+                                <div class="mono-result">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                                        <div>
+                                            <div style="font-weight: 800; font-size: 20px;" id="mono-title">Title</div>
+                                            <div style="color: var(--subtext); font-weight: 500;" id="mono-artist">Artist</div>
+                                        </div>
+                                        <div style="display: flex; gap: 8px;">
+                                            <button class="action-btn" style="background: rgba(255,255,255,0.1); padding: 8px 16px;" onclick="copyMonoCommand()"><i class="fas fa-copy"></i> Copy FFplay</button>
+                                            <button class="action-btn" id="mono-play-btn" style="background: var(--accent); color: black; padding: 8px 16px; display: none;" onclick="playMonochromeStream()"><i class="fas fa-play"></i> Play in App</button>
+                                        </div>
+                                    </div>
+                                    <div style="font-size: 12px; color: var(--subtext); font-weight: 600;">FFplay Command:</div>
+                                    <div class="mono-command" id="mono-command">ffplay -decryption_key ...</div>
+                                </div>
+                            </div>
+
+                            ${capturedHtml}
+                        </div>
+                    `;
+                })
+                .catch(() => {
+                    // fallback without captured streams
+                    contentDiv.innerHTML = `
+                        <div class="fade-in" style="max-width: 700px; margin: 0 auto;">
+                            <h2 style="font-size: 32px; display: flex; align-items: center; gap: 12px;">
+                                <i class="fas fa-cloud-download-alt" style="color: var(--accent);"></i> Monochrome Stream Interceptor
+                            </h2>
+                            <p style="color: var(--subtext); margin-bottom: 24px; font-weight: 500;">
+                                Enter a Monochrome track URL to retrieve the decryption key and stream URL.
+                                The command will be displayed below; you can copy it to use with FFplay or play it directly in this app (requires FFmpeg installed on server).
+                            </p>
+
+                            <div style="display: flex; gap: 12px; margin-bottom: 20px;">
+                                <input type="text" id="mono-url-input" placeholder="e.g. https://monochrome.tf/track/abc123" style="flex: 1; padding: 14px 20px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; font-family: 'Outfit', sans-serif;">
+                                <button class="action-btn" style="background: var(--accent); color: black; padding: 14px 28px; font-weight: 800; border-radius: 30px; box-shadow: 0 5px 15px rgba(29,185,84,0.3);" onclick="fetchMonochrome()">
+                                    <i class="fas fa-search"></i> Fetch
+                                </button>
+                            </div>
+
+                            <div id="mono-result" style="display: none;">
+                                <div class="mono-result">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                                        <div>
+                                            <div style="font-weight: 800; font-size: 20px;" id="mono-title">Title</div>
+                                            <div style="color: var(--subtext); font-weight: 500;" id="mono-artist">Artist</div>
+                                        </div>
+                                        <div style="display: flex; gap: 8px;">
+                                            <button class="action-btn" style="background: rgba(255,255,255,0.1); padding: 8px 16px;" onclick="copyMonoCommand()"><i class="fas fa-copy"></i> Copy FFplay</button>
+                                            <button class="action-btn" id="mono-play-btn" style="background: var(--accent); color: black; padding: 8px 16px; display: none;" onclick="playMonochromeStream()"><i class="fas fa-play"></i> Play in App</button>
+                                        </div>
+                                    </div>
+                                    <div style="font-size: 12px; color: var(--subtext); font-weight: 600;">FFplay Command:</div>
+                                    <div class="mono-command" id="mono-command">ffplay -decryption_key ...</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+        }
+
+        let monoData = null;
+
+        function fetchMonochrome() {
+            const urlInput = document.getElementById('mono-url-input');
+            const url = urlInput.value.trim();
+            if (!url) return alert("Please enter a Monochrome track URL.");
+
+            fetch('/api/monochrome/fetch', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({url: url})
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    alert("Error: " + data.error);
+                    return;
+                }
+                monoData = data;
+                document.getElementById('mono-result').style.display = 'block';
+                document.getElementById('mono-title').innerText = data.title || 'Unknown Title';
+                document.getElementById('mono-artist').innerText = data.artist || 'Unknown Artist';
+
+                // Build FFplay command
+                const command = `ffplay -decryption_key ${data.decryption_key} -i "${data.stream_url}" -nodisp -autoexit`;
+                document.getElementById('mono-command').innerText = command;
+
+                const playBtn = document.getElementById('mono-play-btn');
+                playBtn.style.display = 'inline-block';
+                playBtn.onclick = () => playMonochromeStream(data.stream_url, data.decryption_key);
+            })
+            .catch(err => {
+                alert("Failed to fetch track: " + err.message);
+            });
+        }
+
+        function copyMonoCommand() {
+            const cmdEl = document.getElementById('mono-command');
+            navigator.clipboard.writeText(cmdEl.innerText).then(() => {
+                alert("FFplay command copied to clipboard!");
+            }).catch(() => {
+                const range = document.createRange();
+                range.selectNode(cmdEl);
+                window.getSelection().removeAllRanges();
+                window.getSelection().addRange(range);
+                document.execCommand('copy');
+                alert("FFplay command copied!");
+            });
+        }
+
+        function copyMonoCommandFromData(cmd) {
+            navigator.clipboard.writeText(cmd).then(() => {
+                alert("FFplay command copied!");
+            }).catch(() => {
+                // fallback
+                const temp = document.createElement('textarea');
+                temp.value = cmd;
+                document.body.appendChild(temp);
+                temp.select();
+                document.execCommand('copy');
+                temp.remove();
+                alert("FFplay command copied!");
+            });
+        }
+
+        function playMonochromeStream(streamUrl, key) {
+            if (!streamUrl || !key) {
+                alert("Missing stream data.");
+                return;
+            }
+            const streamEndpoint = `/api/monochrome/stream?url=${encodeURIComponent(streamUrl)}&key=${encodeURIComponent(key)}`;
+            audio.src = streamEndpoint;
+            audio.play();
+            // update UI with placeholder info
+            document.getElementById('np-title').innerText = monoData ? monoData.title : 'Monochrome Stream';
+            document.getElementById('np-artist').innerText = monoData ? monoData.artist : 'Monochrome';
+            document.getElementById('np-cover').src = '';
+            document.getElementById('rp-cover').src = '';
+        }
+
+        // ---------------------------------------------------------
+        // SETTINGS & ADMIN
+        // ---------------------------------------------------------
         function renderSettings() {
             let html = `
                 <div class="fade-in">
@@ -2236,8 +2617,59 @@ HTML_TEMPLATE = """
 </html>
 """
 
+PUBLIC_PLAYLIST_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ playlist.name }} - Streamer Pro</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root { --bg: #050505; --panel: rgba(18, 18, 18, 0.4); --highlight: #222222; --text: #ffffff; --subtext: #a7a7a7; --accent: #1DB954; --card-bg: rgba(24, 24, 24, 0.6); }
+        body { font-family: 'Outfit', system-ui, sans-serif; background: radial-gradient(circle at top left, #1f1f2e 0%, var(--bg) 100%); color: var(--text); margin: 0; padding: 40px; display: flex; flex-direction: column; align-items: center; min-height: 100vh;}
+        .container { width: 100%; max-width: 900px; background: var(--panel); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); padding: 40px; border-radius: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.8); border: 1px solid rgba(255,255,255,0.05); }
+        h1 { margin-top: 0; font-size: 42px; font-weight: 800; letter-spacing: -1px; margin-bottom: 8px;}
+        .song-row { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; background: rgba(0,0,0,0.2); border-radius: 12px; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.02); transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
+        .song-row:hover { background: rgba(255,255,255,0.05); transform: translateY(-3px); box-shadow: 0 10px 20px rgba(0,0,0,0.4); }
+        .song-info { display: flex; align-items: center; gap: 20px; }
+        .song-info img { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; box-shadow: 0 5px 15px rgba(0,0,0,0.4);}
+        .primary-btn { background: var(--accent); color: black; border: none; padding: 14px 28px; border-radius: 30px; font-weight: 700; cursor: pointer; text-decoration: none; display: inline-block; font-size: 16px; transition: all 0.3s ease; box-shadow: 0 5px 15px rgba(29, 185, 84, 0.3);}
+        .primary-btn:hover { background: #1ed760; transform: scale(1.05); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:40px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 30px;">
+            <div>
+                <h1>🎵 {{ playlist.name }}</h1>
+                <p style="color:var(--subtext); margin:0; font-weight: 500; font-size: 15px;">Shared Playlist • Created by <strong style="color:white;">{{ playlist.creator }}</strong></p>
+            </div>
+            <a href="/" class="primary-btn"><i class="fas fa-home" style="margin-right:8px;"></i> Open Streamer Pro</a>
+        </div>
+
+        <h3 style="font-size: 20px; font-weight: 800; margin-bottom: 20px;">Tracks ({{ songs|length }})</h3>
+        <div style="margin-top:20px;">
+            {% for song in songs %}
+            <div class="song-row">
+                <div class="song-info">
+                    <img src="/api/cover?file={{ song.filename | urlencode }}">
+                    <div>
+                        <div style="font-weight:800; font-size:16px;">{{ song.title }}</div>
+                        <div style="color:var(--subtext); font-size:14px; margin-top:4px; font-weight:500;">{{ song.artist }}</div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>
+"""
+
 # ---------------------------------------------------------
-# ROUTE HANDLERS
+# ROUTE HANDLERS (Including Monochrome routes)
 # ---------------------------------------------------------
 @app.route('/')
 def index():
@@ -2710,6 +3142,114 @@ def admin_users_api():
             return jsonify({"success": True})
         return jsonify({"success": False, "error": "Cannot delete active or non-existent user"})
 
+# --- MONOCHROME API ROUTES ---
+@app.route('/api/monochrome/fetch', methods=['POST'])
+def api_monochrome_fetch():
+    """Fetches track info from Monochrome given a track URL."""
+    if 'user' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.json
+    track_url = data.get('url', '').strip()
+    if not track_url:
+        return jsonify({"error": "No URL provided"}), 400
+
+    result = fetch_monochrome_track(track_url)
+    if not result:
+        return jsonify({"error": "Failed to fetch track or no stream available"}), 404
+
+    return jsonify(result)
+
+@app.route('/api/monochrome/stream')
+def api_monochrome_stream():
+    """
+    Proxies a decrypted stream using FFmpeg.
+    Expects query params: url and key.
+    Requires FFmpeg installed on the server.
+    """
+    if 'user' not in session:
+        return "Unauthorized", 401
+
+    stream_url = request.args.get('url')
+    key = request.args.get('key')
+    if not stream_url or not key:
+        return "Missing parameters", 400
+
+    if not is_ffmpeg_available():
+        return "FFmpeg not installed on server", 503
+
+    cmd = [
+        'ffmpeg',
+        '-decryption_key', key,
+        '-i', stream_url,
+        '-f', 'mp3',
+        '-'
+    ]
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return Response(process.stdout, mimetype='audio/mpeg')
+    except Exception as e:
+        return f"FFmpeg error: {e}", 500
+
+@app.route('/api/monochrome/ffplay')
+def api_monochrome_ffplay():
+    """Returns the FFplay command for a given stream URL and key."""
+    if 'user' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    stream_url = request.args.get('url')
+    key = request.args.get('key')
+    if not stream_url or not key:
+        return jsonify({"error": "Missing parameters"}), 400
+
+    escaped_url = stream_url.replace('"', '\\"')
+    command = f'ffplay -decryption_key {key} -i "{escaped_url}" -nodisp -autoexit'
+    return jsonify({"command": command})
+
+@app.route('/api/monochrome/capture', methods=['POST'])
+def api_monochrome_capture():
+    """
+    Receive stream data from the userscript (browser) and store it for the current user.
+    Expects JSON: { stream_url, decryption_key, artist, title }
+    """
+    if 'user' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json
+    stream_url = data.get('stream_url')
+    decryption_key = data.get('decryption_key')
+    artist = data.get('artist', 'Unknown Artist')
+    title = data.get('title', 'Unknown Track')
+
+    if not stream_url or not decryption_key:
+        return jsonify({"error": "Missing stream_url or decryption_key"}), 400
+
+    # Store in a simple in‑memory cache keyed by user session
+    user_id = session['user']
+    if user_id not in mono_captures:
+        mono_captures[user_id] = []
+    # Avoid duplicates (simple check on title/artist)
+    for item in mono_captures[user_id]:
+        if item['title'] == title and item['artist'] == artist:
+            return jsonify({"success": True, "message": "Already captured"})
+    mono_captures[user_id].append({
+        'stream_url': stream_url,
+        'decryption_key': decryption_key,
+        'artist': artist,
+        'title': title
+    })
+    # Keep only last 20
+    if len(mono_captures[user_id]) > 20:
+        mono_captures[user_id] = mono_captures[user_id][-20:]
+    return jsonify({"success": True, "message": "Captured successfully"})
+
+@app.route('/api/monochrome/captured')
+def api_monochrome_captured():
+    """Return the list of captured streams for the current user."""
+    if 'user' not in session:
+        return jsonify([]), 401
+    user_id = session['user']
+    return jsonify(mono_captures.get(user_id, []))
+
+# --- COVER ART & VIDEO ---
 @app.route('/api/cover')
 def api_cover():
     filename = request.args.get('file', '')
@@ -2768,6 +3308,9 @@ def api_video():
 def serve_profiles(filename):
     return send_from_directory(PROFILES_DIR, filename)
 
+# ---------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------
 if __name__ == '__main__':
     print(f"🎵 App running on port {PORT}! Open http://localhost:{PORT}")
     app.run(host='0.0.0.0', port=PORT)
