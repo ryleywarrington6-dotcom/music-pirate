@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: music-pirate
+    runtime: python
+    buildCommand: |
+      apt-get update && apt-get install -y ffmpeg -y
+      pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATA_DIR
+        value: /var/data
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
