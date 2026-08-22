@@ -60,6 +60,19 @@ def after_request(response):
         response.headers.add('Access-Control-Allow-Origin', origin)
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')  # allow cookies
+    return response
+
+# Explicit OPTIONS handler for the capture endpoint
+@app.route('/api/monochrome/capture', methods=['OPTIONS'])
+def capture_options():
+    response = jsonify({})
+    origin = request.headers.get('Origin', '')
+    if origin and origin.startswith('https://monochrome.tf'):
+        response.headers.add('Access-Control-Allow-Origin', origin)
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
     return response
 
 # ---------------------------------------------------------
