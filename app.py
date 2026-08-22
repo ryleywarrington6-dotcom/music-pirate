@@ -16,6 +16,14 @@ import shutil
 from flask import Flask, request, session, redirect, url_for, render_template_string, jsonify, send_from_directory, Response, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 
+# ---------------------------------------------------------
+# ADD LOCAL FFMPEG TO PATH (so the app finds it)
+# ---------------------------------------------------------
+app_dir = os.path.dirname(os.path.abspath(__file__))
+local_ffmpeg = os.path.join(app_dir, 'ffmpeg')
+if os.path.exists(local_ffmpeg) and os.access(local_ffmpeg, os.X_OK):
+    os.environ['PATH'] = app_dir + os.pathsep + os.environ.get('PATH', '')
+
 try:
     import mutagen
     from mutagen.flac import FLAC
@@ -60,7 +68,7 @@ def after_request(response):
         response.headers.add('Access-Control-Allow-Origin', origin)
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        response.headers.add('Access-Control-Allow-Credentials', 'true')  # allow cookies
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
     return response
 
 # Explicit OPTIONS handler for the capture endpoint
@@ -368,6 +376,7 @@ def search_youtube_video(artist, song):
 # MONOCHROME INTEGRATION HELPERS
 # ---------------------------------------------------------
 def is_ffmpeg_available():
+    # uses PATH, which we updated at startup
     return shutil.which('ffmpeg') is not None
 
 # ---------------------------------------------------------
