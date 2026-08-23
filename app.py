@@ -3217,13 +3217,6 @@ def api_monochrome_capture():
         mono_captures[user_id] = mono_captures[user_id][-20:]
     return jsonify({"success": True, "message": "Captured successfully"})
 
-@app.route('/api/monochrome/captured')
-def api_monochrome_captured():
-    if 'user' not in session:
-        return jsonify([]), 401
-    user_id = session['user']
-    return jsonify(mono_captures.get(user_id, []))
-
 @app.route('/api/monochrome/stream')
 def api_monochrome_stream():
     if 'user' not in session:
@@ -3236,25 +3229,30 @@ def api_monochrome_stream():
     if not stream_url or not key:
         return "Missing parameters", 400
 
-    # Locate ffmpeg binary (local or system)
-    ffmpeg_path = shutil.which('ffmpeg')
-    if not ffmpeg_path:
-        local_ffmpeg = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ffmpeg')
-        if os.path.exists(local_ffmpeg) and os.access(local_ffmpeg, os.X_OK):
-            ffmpeg_path = local_ffmpeg
-        else:
-            return "FFmpeg not installed", 503
+    # Locate ffmpeg binary – prefer the local one
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    local_ffmpeg = os.path.join(app_dir, 'ffmpeg')
+    ffmpeg_path = None
+    if os.path.exists(local_ffmpeg) and os.access(local_ffmpeg, os.X_OK):
+        ffmpeg_path = local_ffmpeg
+    else:
+        ffmpeg_path = shutil.which('ffmpeg')
 
+    if not ffmpeg_path:
+        return "FFmpeg not found", 503
+
+    # Build command with explicit MP3 encoding
     cmd = [
         ffmpeg_path,
         '-decryption_key', key,
         '-i', stream_url,
+        '-acodec', 'libmp3lame',
+        '-b:a', '128k',
         '-f', 'mp3',
         '-'
     ]
 
     if bearer_token:
-        # Insert headers right after the binary (before other arguments)
         header_str = f"Authorization: Bearer {bearer_token}\r\n"
         cmd.insert(2, '-headers')
         cmd.insert(3, header_str)
@@ -3270,8 +3268,7 @@ def api_monochrome_stream():
             bufsize=0
         )
 
-        # We'll stream stdout, but also capture stderr asynchronously
-        # to log errors without blocking the response.
+        # Log stderr asynchronously
         import threading
         def log_stderr():
             stderr_data = process.stderr.read()
@@ -3280,7 +3277,7 @@ def api_monochrome_stream():
         thread = threading.Thread(target=log_stderr)
         thread.start()
 
-        # Return the stdout pipe as a streaming response
+        # Return the stdout as a streaming response
         return Response(process.stdout, mimetype='audio/mpeg')
     except Exception as e:
         return f"FFmpeg error: {e}", 500
