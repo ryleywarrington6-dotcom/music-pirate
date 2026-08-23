@@ -2656,6 +2656,670 @@ HTML_TEMPLATE = """
 # ---------------------------------------------------------
 # All route handlers are already defined in the earlier part of the script.
 # The app runs as a single file.
+# ---------------------------------------------------------
+# ROUTE HANDLERS
+# ---------------------------------------------------------
+@app.route('/')
+def index():
+    db = load_db()
+    users = db.get("users", {})
+
+    if not users:
+        return redirect(url_for('login'))
+
+    if 'user' not in session:
+        return redirect(url_for('login'))
+
+    current_user_data = users.get(session['user'], {})
+    is_admin = current_user_data.get('is_admin', False)
+    user_pfp = current_user_data.get('pfp', '')
+    user_bg = current_user_data.get('bg_color', '#080808')
+
+    return render_template_string(HTML_TEMPLATE, is_admin=is_admin, user_pfp=user_pfp, user_bg=user_bg)
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    db = load_db()
+    users = db.get("users", {})
+    setup = not bool(users)
+    error = None
+
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+
+        if setup:
+            db["users"] = {username: {'password': generate_password_hash(password), 'is_admin': True, 'likes': [], 'dislikes': [], 'play_counts': {}, 'bg_color': '#080808', 'pfp': '', 'friends': [], 'friend_requests': []}}
+            save_db(db)
+            session['user'] = username
+            session['is_admin'] = True
+            return redirect(url_for('index'))
+        else:
+            if username in users and check_password_hash(users[username]['password'], password):
+                session['user'] = username
+                session['is_admin'] = users[username].get('is_admin', False)
+                return redirect(url_for('index'))
+            else:
+                error = "Invalid username or password."
+
+    return render_template_string(LOGIN_TEMPLATE, setup=setup, error=error)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+# --- NATIVE BYTE-RANGE STREAMING FIX ---
+@app.route('/play/<path:filename>')
+def play(filename):
+    if 'user' not in session: return "Unauthorized", 401
+
+    clean_filename = urllib.parse.unquote(filename).lstrip('/')
+    filepath = os.path.normpath(os.path.join(MUSIC_DIR, clean_filename))
+
+    if not filepath.startswith(MUSIC_DIR):
+        return "Unauthorized", 403
+
+    if not os.path.exists(filepath):
+        return "Audio file not found", 404
+
+    mime_type, _ = mimetypes.guess_type(filepath)
+    if not mime_type:
+        mime_type = 'audio/flac' if filepath.lower().endswith('.flac') else 'audio/mpeg'
+
+    return send_file(filepath, mimetype=mime_type, conditional=True)
+
+@app.route('/download/<path:filename>')
+def download(filename):
+    if 'user' not in session: return "Unauthorized", 401
+
+    clean_filename = urllib.parse.unquote(filename).lstrip('/')
+    filepath = os.path.normpath(os.path.join(MUSIC_DIR, clean_filename))
+
+    if not filepath.startswith(MUSIC_DIR):
+        return "Unauthorized", 403
+
+    if not os.path.exists(filepath):
+        return "Audio file not found", 404
+
+    directory = os.path.dirname(filepath)
+    file_basename = os.path.basename(filepath)
+    return send_from_directory(directory, file_basename, as_attachment=True)
+
+@app.route('/api/data')
+def api_data():
+    if 'user' not in session: return jsonify({"songs": [], "stats": {}}), 401
+    songs = get_all_songs_enriched()
+    stats = get_aggregated_stats()
+    return jsonify({"songs": songs, "stats": stats})
+
+@app.route('/api/radio/next')
+def api_radio():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    history_param = request.args.get('history', '')
+    current_artist = request.args.get('current_artist', '')
+    history_list = [urllib.parse.unquote(x) for x in history_param.split(',')] if history_param else []
+    next_song_obj = get_radio_recommendation(session['user'], history_list, current_artist)
+    return jsonify({"song": next_song_obj})
+
+# --- PLAYLIST API ROUTES ---
+@app.route('/api/playlists', methods=['GET', 'POST'])
+def api_playlists():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    if 'playlists' not in db: db['playlists'] = {}
+
+    if request.method == 'GET':
+        return jsonify(db['playlists'])
+
+    elif request.method == 'POST':
+        data = request.json
+        name = data.get('name', '').strip()
+        if not name: return jsonify({"success": False, "error": "Playlist name required"})
+
+        token = uuid.uuid4().hex[:8]
+        db['playlists'][token] = {
+            "name": name,
+            "creator": session['user'],
+            "songs": []
+        }
+        save_db(db)
+        return jsonify({"success": True, "token": token})
+
+@app.route('/api/playlist/<token>', methods=['GET', 'DELETE'])
+def api_playlist_detail(token):
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    playlists = db.get('playlists', {})
+    if token not in playlists: return jsonify({"error": "Playlist not found"}), 404
+
+    if request.method == 'GET':
+        return jsonify(playlists[token])
+
+    elif request.method == 'DELETE':
+        if playlists[token]['creator'] != session['user'] and not session.get('is_admin'):
+            return jsonify({"error": "Unauthorized"}), 403
+        del playlists[token]
+        save_db(db)
+        return jsonify({"success": True})
+
+@app.route('/api/playlist/<token>/song', methods=['POST', 'DELETE'])
+def api_playlist_songs(token):
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    playlists = db.get('playlists', {})
+    if token not in playlists: return jsonify({"error": "Playlist not found"}), 404
+
+    data = request.json
+    filename = data.get('filename')
+    if not filename: return jsonify({"success": False, "error": "Filename required"})
+
+    if request.method == 'POST':
+        if filename not in playlists[token]['songs']:
+            playlists[token]['songs'].append(filename)
+            save_db(db)
+        return jsonify({"success": True})
+
+    elif request.method == 'DELETE':
+        if filename in playlists[token]['songs']:
+            playlists[token]['songs'].remove(filename)
+            save_db(db)
+        return jsonify({"success": True})
+
+@app.route('/playlist/<token>')
+def public_playlist_view(token):
+    db = load_db()
+    playlists = db.get('playlists', {})
+    if token not in playlists: return "Playlist not found", 404
+
+    pl = playlists[token]
+    songs = []
+    for f in pl['songs']:
+        clean_f = urllib.parse.unquote(f).lstrip('/')
+        if os.path.exists(os.path.join(MUSIC_DIR, clean_f)):
+            songs.append(get_song_metadata(clean_f))
+
+    return render_template_string(PUBLIC_PLAYLIST_TEMPLATE, playlist=pl, songs=songs)
+
+# --- SOCIAL & MESSAGING API ROUTES ---
+@app.route('/api/social/friends', methods=['GET'])
+def api_friends():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    me = session['user']
+    user_data = db["users"].get(me, {})
+
+    friends_list = user_data.get('friends', [])
+    requests_list = user_data.get('friend_requests', [])
+
+    friends_payload = []
+    for f in friends_list:
+        if f in db["users"]:
+            f_data = db["users"][f]
+            np = f_data.get('now_playing')
+            if np and (int(time.time()) - np.get('time', 0)) > 7200:
+                np = None
+            friends_payload.append({
+                "username": f,
+                "pfp": f_data.get("pfp", ""),
+                "now_playing": np
+            })
+
+    requests_payload = [{"username": r, "pfp": db["users"].get(r, {}).get("pfp", "")} for r in requests_list if r in db["users"]]
+    return jsonify({"friends": friends_payload, "requests": requests_payload})
+
+@app.route('/api/social/status', methods=['POST'])
+def api_social_status():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    song = request.json.get('song')
+    if song:
+        db['users'][session['user']]['now_playing'] = {'song': song, 'time': int(time.time())}
+        save_db(db)
+    return jsonify({"success": True})
+
+@app.route('/api/social/request', methods=['POST'])
+def api_send_request():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    me = session['user']
+    target = request.json.get('target_username', '').strip()
+
+    if target == me: return jsonify({"success": False, "error": "Cannot add yourself."})
+    if target not in db["users"]: return jsonify({"success": False, "error": "User not found."})
+
+    target_data = db["users"][target]
+    if 'friend_requests' not in target_data: target_data['friend_requests'] = []
+    if 'friends' not in target_data: target_data['friends'] = []
+
+    if me in target_data['friends']: return jsonify({"success": False, "error": "Already friends."})
+    if me in target_data['friend_requests']: return jsonify({"success": False, "error": "Request already sent."})
+
+    target_data['friend_requests'].append(me)
+    save_db(db)
+    return jsonify({"success": True})
+
+@app.route('/api/social/accept', methods=['POST'])
+def api_accept_request():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    me = session['user']
+    target = request.json.get('target_username', '').strip()
+
+    my_data = db["users"].get(me)
+    target_data = db["users"].get(target)
+
+    if target in my_data.get('friend_requests', []):
+        my_data['friend_requests'].remove(target)
+        if 'friends' not in my_data: my_data['friends'] = []
+        if 'friends' not in target_data: target_data['friends'] = []
+
+        if target not in my_data['friends']: my_data['friends'].append(target)
+        if me not in target_data['friends']: target_data['friends'].append(me)
+
+        save_db(db)
+        return jsonify({"success": True})
+
+    return jsonify({"success": False, "error": "No pending request."})
+
+@app.route('/api/social/messages/<friend>', methods=['GET', 'POST'])
+def api_messages(friend):
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    me = session['user']
+    if 'messages' not in db: db['messages'] = {}
+
+    chat_key = f"{min(me, friend)}||{max(me, friend)}"
+    if chat_key not in db['messages']: db['messages'][chat_key] = []
+
+    if request.method == 'GET':
+        return jsonify({"messages": db['messages'][chat_key]})
+    elif request.method == 'POST':
+        msg = request.json.get('msg', '').strip()
+        if not msg: return jsonify({"success": False})
+
+        new_msg = { "from": me, "msg": msg, "timestamp": int(time.time()) }
+        db['messages'][chat_key].append(new_msg)
+        save_db(db)
+        return jsonify({"success": True})
+
+@app.route('/api/status')
+def api_status():
+    if 'user' not in session: return jsonify({"liked": False, "disliked": False})
+    song = request.args.get('song')
+    db = load_db()
+    user = db["users"].get(session['user'], {})
+    return jsonify({
+        "liked": song in user.get("likes", []),
+        "disliked": song in user.get("dislikes", [])
+    })
+
+@app.route('/api/feedback', methods=['POST'])
+def api_feedback():
+    if 'user' not in session: return jsonify({"success": False}), 401
+    data = request.json
+    action, song = data.get('action'), data.get('song')
+    db = load_db()
+    user = db["users"][session['user']]
+    if 'likes' not in user: user['likes'] = []
+    if 'dislikes' not in user: user['dislikes'] = []
+    if 'play_counts' not in user: user['play_counts'] = {}
+
+    if action == 'listen': user['play_counts'][song] = user['play_counts'].get(song, 0) + 1
+    elif action == 'like':
+        if song in user['likes']: user['likes'].remove(song)
+        else:
+            user['likes'].append(song)
+            if song in user['dislikes']: user['dislikes'].remove(song)
+    elif action == 'dislike':
+        if song in user['dislikes']: user['dislikes'].remove(song)
+        else:
+            user['dislikes'].append(song)
+            if song in user['likes']: user['likes'].remove(song)
+
+    save_db(db)
+    return jsonify({"success": True})
+
+# --- PROFILE CUSTOMIZATION API ROUTES ---
+@app.route('/api/admin/upload', methods=['POST'])
+def api_admin_upload():
+    if not session.get('is_admin'):
+        return jsonify({"error": "Unauthorized"}), 403
+
+    if 'files' not in request.files:
+        return jsonify({"error": "No files provided"}), 400
+
+    files = request.files.getlist('files')
+    saved = 0
+    for file in files:
+        if file.filename:
+            filename = file.filename.replace('/', '').replace('\\', '')
+            filepath = os.path.join(MUSIC_DIR, filename)
+            file.save(filepath)
+            saved += 1
+
+    global _meta_cache_dirty
+    _meta_cache_dirty = True
+    return jsonify({"success": True, "saved": saved})
+
+@app.route('/api/settings/username', methods=['POST'])
+def change_username_api():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    new_name = request.json.get('new_username', '').strip()
+    if not new_name or len(new_name) < 3: return jsonify({"error": "Username must be at least 3 characters."})
+
+    db = load_db()
+    old_name = session['user']
+
+    if new_name == old_name: return jsonify({"success": True})
+    if new_name in db["users"]: return jsonify({"error": "Username already taken."})
+
+    db["users"][new_name] = db["users"].pop(old_name)
+
+    for pl in db.get("playlists", {}).values():
+        if pl["creator"] == old_name:
+            pl["creator"] = new_name
+
+    for u_data in db["users"].values():
+        if old_name in u_data.get('friends', []):
+            u_data['friends'].remove(old_name)
+            u_data['friends'].append(new_name)
+        if old_name in u_data.get('friend_requests', []):
+            u_data['friend_requests'].remove(old_name)
+            u_data['friend_requests'].append(new_name)
+
+    if 'messages' in db:
+        old_message_keys = list(db['messages'].keys())
+        for key in old_message_keys:
+            if old_name in key.split('||'):
+                parts = key.split('||')
+                other_person = parts[0] if parts[1] == old_name else parts[1]
+                new_key = f"{min(new_name, other_person)}||{max(new_name, other_person)}"
+
+                chat_history = db['messages'].pop(key)
+                for msg in chat_history:
+                    if msg['from'] == old_name:
+                        msg['from'] = new_name
+                db['messages'][new_key] = chat_history
+
+    save_db(db)
+    session['user'] = new_name
+    return jsonify({"success": True, "new_username": new_name})
+
+@app.route('/api/settings/profile', methods=['POST'])
+def update_profile_api():
+    if 'user' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = load_db()
+    user_data = db["users"][session['user']]
+
+    bg_color = request.form.get('bg_color')
+    if bg_color: user_data['bg_color'] = bg_color
+
+    if 'pfp' in request.files:
+        file = request.files['pfp']
+        if file.filename != '':
+            ext = os.path.splitext(file.filename)[1].lower()
+            if ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']:
+                filename = f"pfp_{uuid.uuid4().hex[:8]}{ext}"
+                filepath = os.path.join(PROFILES_DIR, filename)
+                file.save(filepath)
+                user_data['pfp'] = f"/Profiles/{filename}"
+
+    save_db(db)
+    return jsonify({"success": True})
+
+@app.route('/api/settings/password', methods=['POST'])
+def change_password_api():
+    if 'user' not in session:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+    data = request.json
+    curr_pwd = data.get('current_password', '')
+    new_pwd = data.get('new_password', '')
+
+    db = load_db()
+    user_data = db["users"].get(session['user'])
+
+    if not user_data or not check_password_hash(user_data['password'], curr_pwd):
+        return jsonify({"success": False, "error": "Incorrect current password"})
+
+    user_data['password'] = generate_password_hash(new_pwd)
+    save_db(db)
+    return jsonify({"success": True})
+
+@app.route('/api/admin/users', methods=['GET', 'POST', 'DELETE'])
+def admin_users_api():
+    if not session.get('is_admin'):
+        return jsonify({"error": "Unauthorized"}), 403
+
+    db = load_db()
+
+    if request.method == 'GET':
+        safe_users = {uname: {"is_admin": udata.get("is_admin", False)} for uname, udata in db["users"].items()}
+        return jsonify(safe_users)
+
+    elif request.method == 'POST':
+        data = request.json
+        uname = data.get('username', '').strip()
+        pwd = data.get('password', '')
+        is_admin = bool(data.get('is_admin', False))
+
+        if not uname or not pwd:
+            return jsonify({"success": False, "error": "Username and password required"})
+
+        db["users"][uname] = {
+            "password": generate_password_hash(pwd),
+            "is_admin": is_admin,
+            "likes": [],
+            "dislikes": [],
+            "play_counts": {},
+            "bg_color": "#050505",
+            "pfp": "",
+            "friends": [],
+            "friend_requests": []
+        }
+        save_db(db)
+        return jsonify({"success": True})
+
+    elif request.method == 'DELETE':
+        data = request.json
+        uname = data.get('username', '')
+        if uname in db["users"] and uname != session.get('user'):
+            del db["users"][uname]
+            save_db(db)
+            return jsonify({"success": True})
+        return jsonify({"success": False, "error": "Cannot delete active or non-existent user"})
+
+# --- MONOCHROME API ROUTES ---
+@app.route('/api/monochrome/fetch', methods=['POST'])
+def api_monochrome_fetch():
+    if 'user' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.json
+    track_url = data.get('url', '').strip()
+    if not track_url:
+        return jsonify({"error": "No URL provided"}), 400
+
+    result = fetch_monochrome_track(track_url)
+    if result:
+        return jsonify(result)
+    else:
+        return jsonify({"error": "Failed to fetch track or no stream available"}), 404
+
+def fetch_monochrome_track(track_url):
+    match = re.search(r'/track/([^/?]+)', track_url)
+    if not match:
+        return None
+    track_id = match.group(1)
+    api_url = f"https://monochrome.tf/api/v2/track/{track_id}"
+    try:
+        req = urllib.request.Request(api_url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Origin': 'https://monochrome.tf',
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            stream = data.get('playback', [{}])[0]
+            if not stream or not stream.get('url') or not stream.get('encryption', {}).get('key', {}).get('value'):
+                return None
+            return {
+                'stream_url': stream['url'],
+                'decryption_key': stream['encryption']['key']['value'],
+                'artist': data.get('track', {}).get('artists', ['Unknown Artist'])[0],
+                'title': data.get('track', {}).get('title', 'Unknown Track')
+            }
+    except Exception as e:
+        print(f"Monochrome fetch error: {e}")
+        return None
+
+@app.route('/api/monochrome/capture', methods=['POST'])
+def api_monochrome_capture():
+    if 'user' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json
+    stream_url = data.get('stream_url')
+    decryption_key = data.get('decryption_key')
+    artist = data.get('artist', 'Unknown Artist')
+    title = data.get('title', 'Unknown Track')
+    bearer_token = data.get('bearer_token')
+
+    if not stream_url or not decryption_key:
+        return jsonify({"error": "Missing stream_url or decryption_key"}), 400
+
+    user_id = session['user']
+    if user_id not in mono_captures:
+        mono_captures[user_id] = []
+
+    for item in mono_captures[user_id]:
+        if item['title'] == title and item['artist'] == artist:
+            if bearer_token:
+                item['bearer_token'] = bearer_token
+            return jsonify({"success": True, "message": "Already captured"})
+
+    mono_captures[user_id].append({
+        'stream_url': stream_url,
+        'decryption_key': decryption_key,
+        'artist': artist,
+        'title': title,
+        'bearer_token': bearer_token
+    })
+    if len(mono_captures[user_id]) > 20:
+        mono_captures[user_id] = mono_captures[user_id][-20:]
+    return jsonify({"success": True, "message": "Captured successfully"})
+
+@app.route('/api/monochrome/captured')
+def api_monochrome_captured():
+    if 'user' not in session:
+        return jsonify([]), 401
+    user_id = session['user']
+    return jsonify(mono_captures.get(user_id, []))
+
+@app.route('/api/monochrome/stream')
+def api_monochrome_stream():
+    if 'user' not in session:
+        return "Unauthorized", 401
+
+    stream_url = request.args.get('url')
+    key = request.args.get('key')
+    bearer_token = request.args.get('bearer_token')
+
+    if not stream_url or not key:
+        return "Missing parameters", 400
+
+    if not is_ffmpeg_available():
+        return "FFmpeg not installed on server", 503
+
+    cmd = [
+        'ffmpeg',
+        '-decryption_key', key,
+        '-i', stream_url,
+        '-f', 'mp3',
+        '-'
+    ]
+
+    if bearer_token:
+        header_str = f"Authorization: Bearer {bearer_token}\r\n"
+        cmd.insert(2, '-headers')
+        cmd.insert(3, header_str)
+
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return Response(process.stdout, mimetype='audio/mpeg')
+    except Exception as e:
+        return f"FFmpeg error: {e}", 500
+
+@app.route('/api/monochrome/ffplay')
+def api_monochrome_ffplay():
+    if 'user' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    stream_url = request.args.get('url')
+    key = request.args.get('key')
+    if not stream_url or not key:
+        return jsonify({"error": "Missing parameters"}), 400
+    escaped_url = stream_url.replace('"', '\\"')
+    command = f'ffplay -decryption_key {key} -i "{escaped_url}" -nodisp -autoexit'
+    return jsonify({"command": command})
+
+# --- COVER ART & VIDEO ---
+@app.route('/api/cover')
+def api_cover():
+    filename = request.args.get('file', '')
+    clean_filename = urllib.parse.unquote(filename).lstrip('/')
+    filepath = os.path.normpath(os.path.join(MUSIC_DIR, clean_filename))
+
+    if os.path.exists(filepath):
+        try:
+            audio = mutagen.File(filepath)
+            if audio is not None:
+                if hasattr(audio, 'tags') and audio.tags:
+                    for key in list(audio.tags.keys()):
+                        if key.startswith('APIC') or key.startswith('COVR'):
+                            pic = audio.tags[key]
+                            mime = getattr(pic, 'mime', 'image/jpeg')
+                            return send_file(io.BytesIO(pic.data), mimetype=mime)
+                if hasattr(audio, 'pictures') and audio.pictures:
+                    pic = audio.pictures[0]
+                    img_data = getattr(pic, 'data', None) or getattr(pic, 'pic_data', None)
+                    if img_data:
+                        mime = getattr(pic, 'mime', 'image/jpeg')
+                        return send_file(io.BytesIO(img_data), mimetype=mime)
+        except Exception:
+            pass
+
+        song_dir = os.path.dirname(filepath)
+        song_clean = os.path.splitext(os.path.basename(clean_filename))[0].lower()
+        valid_exts = ('.jpg', '.jpeg', '.png', '.webp')
+        if os.path.exists(song_dir):
+            try:
+                for f in os.listdir(song_dir):
+                    f_lower = f.lower()
+                    if f_lower.endswith(valid_exts):
+                        f_base = os.path.splitext(f_lower)[0]
+                        if f_base in ['cover', 'folder', 'front', song_clean]:
+                            return send_from_directory(os.path.abspath(song_dir), f)
+            except Exception:
+                pass
+
+    meta = get_song_metadata(clean_filename) if clean_filename else {"artist": "Unknown", "title": "Music"}
+    svg = generate_placeholder_cover(meta['artist'], meta['title'])
+    return Response(svg, mimetype='image/svg+xml')
+
+@app.route('/api/video')
+def api_video():
+    artist = request.args.get('artist', '').strip()
+    song = request.args.get('song', '').strip()
+
+    if not artist or artist == "Unknown Artist":
+        return jsonify({"youtube_id": None})
+
+    youtube_id = search_youtube_video(artist, song)
+    return jsonify({"youtube_id": youtube_id})
+
+@app.route('/Profiles/<path:filename>')
+def serve_profiles(filename):
+    return send_from_directory(PROFILES_DIR, filename)
 
 if __name__ == '__main__':
     print(f"🎵 App running on port {PORT}! Open http://localhost:{PORT}")
