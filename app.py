@@ -71,15 +71,18 @@ def is_allowed_origin(origin):
 def after_request(response):
     origin = request.headers.get('Origin')
     if origin and is_allowed_origin(origin):
-        response.headers.add('Access-Control-Allow-Origin', origin)
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        # Use .set() to avoid duplicates
+        response.headers.set('Access-Control-Allow-Origin', origin)
+        response.headers.set('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        response.headers.set('Access-Control-Allow-Credentials', 'true')
     return response
 
-# Explicit OPTIONS handler for the capture endpoint
 @app.route('/api/monochrome/capture', methods=['OPTIONS'])
 def capture_options():
+    return '', 200
+
+# Explicit OPTIONS handler for the capture endpoint
     response = jsonify({})
     origin = request.headers.get('Origin', '')
     if origin and is_allowed_origin(origin):
