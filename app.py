@@ -58,20 +58,24 @@ os.makedirs(PROFILES_DIR, exist_ok=True)
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(32).hex())
 
+# Allow cross‑origin session cookies
+app.config.update(
+    SESSION_COOKIE_SAMESITE='None',
+    SESSION_COOKIE_SECURE=True
+)
+
 # ---------------------------------------------------------
 # CORS - allow requests from monochrome.tf and subdomains
 # ---------------------------------------------------------
 def is_allowed_origin(origin):
     if not origin:
         return False
-    # Match: http://monochrome.tf, https://monochrome.tf, or any subdomain
     return re.match(r'^https?://([^/]+\.)?monochrome\.tf$', origin) is not None
 
 @app.after_request
 def after_request(response):
     origin = request.headers.get('Origin')
     if origin and is_allowed_origin(origin):
-        # Use .set() to avoid duplicates
         response.headers.set('Access-Control-Allow-Origin', origin)
         response.headers.set('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
