@@ -50,6 +50,20 @@
       "likes": [],
       "dislikes": [],
       "play_counts": {}
+    },
+    "Logan": {
+      "password": "scrypt:32768:8:1$da3Byn3VXcU6sDWN$d3a7af832df506972fc7750389025cf996394e6aca6ecb099d9c46e3044ac0673ef8bf1731370fd688d2b20501333fc37d4da412731882b3ea5ec186a1acf286",
+      "is_admin": false,
+      "likes": [],
+      "dislikes": [],
+      "play_counts": {}
+    },
+    "Harvey": {
+      "password": "scrypt:32768:8:1$xi4YXK9wCbqfXs12$04f1846fbefaddf34ab38d0c8c72ed1f35c681490da5fc25112a3b620fc940b998ef1795b53f7c94754b235a02b8fc732471013f7e93e0e02617da2e6bf8ad06",
+      "is_admin": false,
+      "likes": [],
+      "dislikes": [],
+      "play_counts": {}
     }
   },
   "playlists": {
