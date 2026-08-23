@@ -58,6 +58,17 @@
       "pfp": "",
       "friends": [],
       "friend_requests": []
+    },
+    "Harvey": {
+      "password": "scrypt:32768:8:1$n5EBszyBZU4EWy7j$58246a466e111442aaba5a8dc4f158127fb519cbb26243f027279971497efe0cfbdb633c07f8e83eb608e049ce8e694ae07f5c57f424440f94c6fffc68731aaa",
+      "is_admin": false,
+      "likes": [],
+      "dislikes": [],
+      "play_counts": {},
+      "bg_color": "#050505",
+      "pfp": "",
+      "friends": [],
+      "friend_requests": []
     }
   },
   "playlists": {},

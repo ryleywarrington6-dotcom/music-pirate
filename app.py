@@ -1,4 +1,5 @@
 import os
+import threading
 import sys
 import io
 import json
@@ -3235,11 +3236,17 @@ def api_monochrome_stream():
     if not stream_url or not key:
         return "Missing parameters", 400
 
-    if not is_ffmpeg_available():
-        return "FFmpeg not installed on server", 503
+    # Locate ffmpeg binary (local or system)
+    ffmpeg_path = shutil.which('ffmpeg')
+    if not ffmpeg_path:
+        local_ffmpeg = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ffmpeg')
+        if os.path.exists(local_ffmpeg) and os.access(local_ffmpeg, os.X_OK):
+            ffmpeg_path = local_ffmpeg
+        else:
+            return "FFmpeg not installed", 503
 
     cmd = [
-        'ffmpeg',
+        ffmpeg_path,
         '-decryption_key', key,
         '-i', stream_url,
         '-f', 'mp3',
@@ -3247,12 +3254,33 @@ def api_monochrome_stream():
     ]
 
     if bearer_token:
+        # Insert headers right after the binary (before other arguments)
         header_str = f"Authorization: Bearer {bearer_token}\r\n"
         cmd.insert(2, '-headers')
         cmd.insert(3, header_str)
 
+    # Log the command (Render logs will show it)
+    print(f"🔧 FFmpeg command: {' '.join(cmd)}")
+
     try:
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0
+        )
+
+        # We'll stream stdout, but also capture stderr asynchronously
+        # to log errors without blocking the response.
+        import threading
+        def log_stderr():
+            stderr_data = process.stderr.read()
+            if stderr_data:
+                print(f"❌ FFmpeg stderr: {stderr_data.decode()}")
+        thread = threading.Thread(target=log_stderr)
+        thread.start()
+
+        # Return the stdout pipe as a streaming response
         return Response(process.stdout, mimetype='audio/mpeg')
     except Exception as e:
         return f"FFmpeg error: {e}", 500
