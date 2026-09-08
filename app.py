@@ -1,5 +1,4 @@
 import os
-import threading
 import sys
 import io
 import json
@@ -14,6 +13,8 @@ import atexit
 import mimetypes
 import subprocess
 import shutil
+import threading
+import select
 from flask import Flask, request, session, redirect, url_for, render_template_string, jsonify, send_from_directory, Response, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -83,19 +84,10 @@ def after_request(response):
         response.headers.set('Access-Control-Allow-Credentials', 'true')
     return response
 
+# Explicit OPTIONS handler – the after_request adds headers
 @app.route('/api/monochrome/capture', methods=['OPTIONS'])
 def capture_options():
     return '', 200
-
-# Explicit OPTIONS handler for the capture endpoint
-    response = jsonify({})
-    origin = request.headers.get('Origin', '')
-    if origin and is_allowed_origin(origin):
-        response.headers.add('Access-Control-Allow-Origin', origin)
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
-    return response
 
 # ---------------------------------------------------------
 # DATABASE & CACHE HELPERS
@@ -133,6 +125,9 @@ atexit.register(_save_meta_cache)
 # In-memory cache for captured Monochrome streams (per user)
 mono_captures = {}  # session_id -> list of dicts
 
+# ---------------------------------------------------------
+# CORE MUSIC LIBRARY FUNCTIONS
+# ---------------------------------------------------------
 def get_all_filepaths():
     audio_files = []
     if os.path.exists(MUSIC_DIR):
@@ -390,10 +385,15 @@ def search_youtube_video(artist, song):
 # MONOCHROME INTEGRATION HELPERS
 # ---------------------------------------------------------
 def is_ffmpeg_available():
+    # Check local first
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    local_ffmpeg = os.path.join(app_dir, 'ffmpeg')
+    if os.path.exists(local_ffmpeg) and os.access(local_ffmpeg, os.X_OK):
+        return True
     return shutil.which('ffmpeg') is not None
 
 # ---------------------------------------------------------
-# HTML TEMPLATES
+# HTML TEMPLATES (Full)
 # ---------------------------------------------------------
 LOGIN_TEMPLATE = """
 <!DOCTYPE html>
@@ -526,7 +526,7 @@ PUBLIC_PLAYLIST_TEMPLATE = """
 </html>
 """
 
-HTML_TEMPLATE = """
+HTML_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -689,6 +689,10 @@ HTML_TEMPLATE = """
         .chat-send-btn { background: var(--accent); color: black; border: none; width: 50px; height: 50px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; transition: 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); box-shadow: 0 5px 15px rgba(29, 185, 84, 0.3); }
         .chat-send-btn:hover { transform: scale(1.1); background: #1ed760; }
 
+        .wishlist-btn { background: none; border: none; color: var(--subtext); font-size: 20px; cursor: pointer; transition: 0.3s; padding: 4px 8px; }
+        .wishlist-btn.active { color: #ffcc00; text-shadow: 0 0 15px rgba(255, 204, 0, 0.6); }
+        .wishlist-btn:hover { transform: scale(1.2); }
+
         @media (max-width: 768px) {
             body { flex-direction: column; overflow: auto; }
             .sidebar { position: fixed; bottom: 88px; left: 0; right: 0; width: 100%; height: auto; flex-direction: row; justify-content: space-around; align-items: center; padding: 6px 8px; background: rgba(10, 10, 10, 0.95); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px); border-top: 1px solid rgba(255,255,255,0.08); border-right: none; z-index: 999; gap: 0; }
@@ -737,6 +741,7 @@ HTML_TEMPLATE = """
         .mono-command { background: #0a0a0a; padding: 16px; border-radius: 8px; font-family: monospace; font-size: 14px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; border: 1px solid #333; margin: 12px 0; }
         .mono-btn-group { display: flex; gap: 12px; flex-wrap: wrap; }
         .captured-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: rgba(0,0,0,0.2); border-radius: 8px; margin-bottom: 8px; border-left: 3px solid var(--accent); }
+        .mono-url-input { flex: 1; padding: 14px 20px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; font-family: 'Outfit', sans-serif; }
     </style>
 </head>
 <body>
@@ -777,6 +782,9 @@ HTML_TEMPLATE = """
 
         <div class="nav-section-title" style="margin-top: 24px;">Social</div>
         <div class="nav-item" onclick="switchView('messages', this)"><i class="fas fa-comment-alt"></i> <span>Messages</span></div>
+
+        <div class="nav-section-title" style="margin-top: 24px;">Library</div>
+        <div class="nav-item" onclick="switchView('wishlist', this)"><i class="fas fa-star"></i> <span>Wishlist</span></div>
 
         <div class="nav-section-title" style="margin-top: 24px;">Advanced</div>
         <div class="nav-item" onclick="switchView('monochrome', this)"><i class="fas fa-cloud-download-alt"></i> <span>Monochrome</span></div>
@@ -922,6 +930,9 @@ HTML_TEMPLATE = """
         let visualizerCanvas = document.getElementById('visualizer');
         let canvasCtx = visualizerCanvas.getContext('2d');
         let visualizerInitialized = false;
+
+        // Wishlist state
+        let wishlist = [];
 
         const contentDiv = document.getElementById('main-content');
         const audio = document.getElementById('audio-player');
@@ -1472,7 +1483,10 @@ HTML_TEMPLATE = """
             allSongs = data.songs;
             songStats = data.stats;
             processArtists(allSongs);
-            switchView('home');
+            // Load wishlist after user is known
+            loadWishlist().then(() => {
+                switchView('home');
+            });
         });
 
         function processArtists(songs) {
@@ -1513,6 +1527,7 @@ HTML_TEMPLATE = """
             }
             if (view === 'monochrome') renderMonochrome();
             if (view === 'settings') renderSettings();
+            if (view === 'wishlist') renderWishlist();
         }
 
         function handleSearch(query) {
@@ -1769,6 +1784,98 @@ HTML_TEMPLATE = """
             }
         }
 
+        // ---- Wishlist Functions ----
+        async function loadWishlist() {
+            try {
+                const res = await fetch('/api/wishlist');
+                if (res.ok) {
+                    const data = await res.json();
+                    wishlist = data.wishlist || [];
+                }
+            } catch(e) { console.warn("Failed to load wishlist", e); }
+        }
+
+        async function toggleWishlist(filename) {
+            const isIn = wishlist.includes(filename);
+            const action = isIn ? 'remove' : 'add';
+            try {
+                const res = await fetch('/api/wishlist', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename, action })
+                });
+                if (res.ok) {
+                    if (action === 'add') wishlist.push(filename);
+                    else wishlist = wishlist.filter(f => f !== filename);
+                    // Refresh UI if on wishlist view
+                    if (document.querySelector('.nav-item.active') && document.querySelector('.nav-item.active').textContent.trim() === 'Wishlist') {
+                        renderWishlist();
+                    } else {
+                        // Update all wishlist buttons
+                        document.querySelectorAll('.wishlist-btn').forEach(btn => {
+                            const fname = btn.dataset.filename;
+                            if (fname) {
+                                if (wishlist.includes(fname)) btn.classList.add('active');
+                                else btn.classList.remove('active');
+                            }
+                        });
+                    }
+                } else {
+                    alert("Failed to update wishlist.");
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        function renderWishlist() {
+            const wishlistSongs = wishlist.map(f => allSongs.find(s => s.filename === f)).filter(Boolean);
+            if (wishlistSongs.length === 0) {
+                contentDiv.innerHTML = `
+                    <div class="fade-in" style="text-align:center; padding: 80px 20px;">
+                        <i class="fas fa-star" style="font-size: 64px; color: rgba(255,255,255,0.1); margin-bottom: 30px;"></i>
+                        <h2 style="font-size: 28px;">Your Wishlist is Empty</h2>
+                        <p style="color: var(--subtext); font-size: 16px; max-width: 400px; margin: 0 auto 20px;">Start adding songs you'd like to download. Click the star icon on any track.</p>
+                        <button class="action-btn" style="background:var(--accent); color:black; padding: 14px 28px; border-radius: 30px;" onclick="switchView('home')">Browse Music</button>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = `
+                <div class="fade-in">
+                    <h2 style="margin-bottom: 20px;"><i class="fas fa-star" style="color: #ffcc00; margin-right: 12px;"></i>Your Wishlist</h2>
+                    <p style="color: var(--subtext); margin-bottom: 24px;">Songs you've marked for future download. Admin can see all wishlists.</p>
+                    <div class="grid">
+            `;
+            wishlistSongs.forEach(song => {
+                const coverUrl = getCoverUrl(song);
+                const cleanTitle = song.title.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
+                const cleanArtist = song.artist.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
+                const cleanFilename = song.filename.replace(/'/g, "\\'");
+                const isIn = wishlist.includes(song.filename);
+                html += `
+                    <div class="card" style="text-align:center;">
+                        <div class="card-img-container" onclick="playSongByFilename('${cleanFilename}')">
+                            <img src="${coverUrl}" loading="lazy">
+                            <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
+                        </div>
+                        <div class="card-info">
+                            <div class="card-title" title="${cleanTitle}">${cleanTitle}</div>
+                            <div class="card-artist" title="${cleanArtist}">${cleanArtist}</div>
+                            <div style="display:flex; justify-content:center; gap: 8px; margin-top: 8px;">
+                                <button class="wishlist-btn ${isIn ? 'active' : ''}" data-filename="${cleanFilename}" onclick="toggleWishlist('${cleanFilename}')" title="Toggle Wishlist"><i class="fas fa-star"></i></button>
+                                <button class="action-btn" style="padding: 6px 10px;" onclick="playSongByFilename('${cleanFilename}')"><i class="fas fa-play"></i></button>
+                                <a href="/download/${encodeURIComponent(song.filename)}" class="action-btn" style="padding: 6px 10px; text-decoration:none;"><i class="fas fa-download"></i></a>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            html += `</div></div>`;
+            contentDiv.innerHTML = html;
+        }
+
+        // ---- End Wishlist ----
+
         function buildCardsHTML(songsArray, isRow = false, playlistToken = null) {
             let html = isRow ? `<div class="scroll-row">` : `<div class="grid">`;
             let filenameArr = JSON.stringify(songsArray.map(s => s.filename)).replace(/"/g, '&quot;');
@@ -1778,6 +1885,7 @@ HTML_TEMPLATE = """
                 let cleanTitle = song.title.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
                 let cleanArtist = song.artist.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
                 let cleanFilename = song.filename.replace(/'/g, "\\'");
+                const isInWishlist = wishlist.includes(song.filename);
 
                 html += `
                 <div class="card">
@@ -1789,7 +1897,8 @@ HTML_TEMPLATE = """
                         <div class="card-title" title="${cleanTitle}" onclick="playQueueByFilenames(${filenameArr}, ${i})">${cleanTitle}</div>
                         <div class="card-bottom-row">
                             <div class="card-artist" title="${cleanArtist}">${cleanArtist}</div>
-                            <div>
+                            <div style="display:flex; gap:4px; align-items:center;">
+                                <button class="wishlist-btn ${isInWishlist ? 'active' : ''}" data-filename="${cleanFilename}" onclick="toggleWishlist('${cleanFilename}')" title="Add to Wishlist"><i class="fas fa-star"></i></button>
                                 ${playlistToken ? `<button class="action-btn danger" style="padding: 6px 10px; background: rgba(255,85,85,0.2);" onclick="removeFromPlaylist('${playlistToken}', '${cleanFilename}')" title="Remove"><i class="fas fa-times"></i></button>` : ''}
                                 <button class="action-btn" style="padding: 6px 10px;" onclick="openAddToPlaylistModal('${cleanFilename}')" title="Add to Playlist"><i class="fas fa-plus"></i></button>
                             </div>
@@ -2200,7 +2309,7 @@ HTML_TEMPLATE = """
         }
 
         // ---------------------------------------------------------
-        // MONOCHROME VIEW
+        // MONOCHROME VIEW (UPDATED)
         // ---------------------------------------------------------
         let monoData = null;
 
@@ -2234,13 +2343,12 @@ HTML_TEMPLATE = """
                                 <i class="fas fa-cloud-download-alt" style="color: var(--accent);"></i> Monochrome Stream Interceptor
                             </h2>
                             <p style="color: var(--subtext); margin-bottom: 24px; font-weight: 500;">
-                                Enter a Monochrome track URL to retrieve the decryption key and stream URL.
-                                The command will be displayed below; you can copy it to use with FFplay or play it directly in this app (requires FFmpeg installed on server).
+                                Paste a Monochrome track URL below to fetch and play it, or use the userscript to capture streams automatically.
                             </p>
 
                             <div style="display: flex; gap: 12px; margin-bottom: 20px;">
-                                <input type="text" id="mono-url-input" placeholder="e.g. https://monochrome.tf/track/abc123" style="flex: 1; padding: 14px 20px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; font-family: 'Outfit', sans-serif;">
-                                <button class="action-btn" style="background: var(--accent); color: black; padding: 14px 28px; font-weight: 800; border-radius: 30px; box-shadow: 0 5px 15px rgba(29,185,84,0.3);" onclick="fetchMonochrome()">
+                                <input type="text" id="mono-url-input" class="mono-url-input" placeholder="e.g. https://monochrome.tf/track/abc123" style="flex: 1; padding: 14px 20px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; font-family: 'Outfit', sans-serif;">
+                                <button class="action-btn" style="background: var(--accent); color: black; padding: 14px 28px; font-weight: 800; border-radius: 30px; box-shadow: 0 5px 15px rgba(29,185,84,0.3);" onclick="fetchMonochromeViaBrowser()">
                                     <i class="fas fa-search"></i> Fetch
                                 </button>
                             </div>
@@ -2267,20 +2375,18 @@ HTML_TEMPLATE = """
                     `;
                 })
                 .catch(() => {
-                    // fallback without captured streams
                     contentDiv.innerHTML = `
                         <div class="fade-in" style="max-width: 700px; margin: 0 auto;">
                             <h2 style="font-size: 32px; display: flex; align-items: center; gap: 12px;">
                                 <i class="fas fa-cloud-download-alt" style="color: var(--accent);"></i> Monochrome Stream Interceptor
                             </h2>
                             <p style="color: var(--subtext); margin-bottom: 24px; font-weight: 500;">
-                                Enter a Monochrome track URL to retrieve the decryption key and stream URL.
-                                The command will be displayed below; you can copy it to use with FFplay or play it directly in this app (requires FFmpeg installed on server).
+                                Paste a Monochrome track URL below to fetch and play it, or use the userscript to capture streams automatically.
                             </p>
 
                             <div style="display: flex; gap: 12px; margin-bottom: 20px;">
-                                <input type="text" id="mono-url-input" placeholder="e.g. https://monochrome.tf/track/abc123" style="flex: 1; padding: 14px 20px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; font-family: 'Outfit', sans-serif;">
-                                <button class="action-btn" style="background: var(--accent); color: black; padding: 14px 28px; font-weight: 800; border-radius: 30px; box-shadow: 0 5px 15px rgba(29,185,84,0.3);" onclick="fetchMonochrome()">
+                                <input type="text" id="mono-url-input" class="mono-url-input" placeholder="e.g. https://monochrome.tf/track/abc123" style="flex: 1; padding: 14px 20px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; font-family: 'Outfit', sans-serif;">
+                                <button class="action-btn" style="background: var(--accent); color: black; padding: 14px 28px; font-weight: 800; border-radius: 30px; box-shadow: 0 5px 15px rgba(29,185,84,0.3);" onclick="fetchMonochromeViaBrowser()">
                                     <i class="fas fa-search"></i> Fetch
                                 </button>
                             </div>
@@ -2306,37 +2412,73 @@ HTML_TEMPLATE = """
                 });
         }
 
-        function fetchMonochrome() {
+        async function fetchMonochromeViaBrowser() {
             const urlInput = document.getElementById('mono-url-input');
             const url = urlInput.value.trim();
             if (!url) return alert("Please enter a Monochrome track URL.");
 
-            fetch('/api/monochrome/fetch', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({url: url})
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.error) {
-                    alert("Error: " + data.error);
-                    return;
+            const match = url.match(/\/track\/([^\/?]+)/);
+            if (!match) return alert("Invalid track URL. Expected https://monochrome.tf/track/ID");
+
+            const trackId = match[1];
+            const apiUrl = `https://monochrome.tf/api/v2/track/${trackId}`;
+
+            try {
+                const response = await fetch(apiUrl, {
+                    credentials: 'include'
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
                 }
-                monoData = data;
+                const data = await response.json();
+
+                const stream = data?.playback?.[0];
+                if (!stream || !stream.url || !stream.encryption?.key?.value) {
+                    throw new Error("No stream or decryption key found in the response.");
+                }
+
+                const artist = data?.track?.artists?.[0] || "Unknown Artist";
+                const title = data?.track?.title || "Unknown Track";
+                const streamUrl = stream.url;
+                const decryptionKey = stream.encryption.key.value;
+
+                const capturePayload = {
+                    stream_url: streamUrl,
+                    decryption_key: decryptionKey,
+                    artist: artist,
+                    title: title,
+                    bearer_token: null
+                };
+
+                const captureResp = await fetch('/api/monochrome/capture', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(capturePayload)
+                });
+                if (!captureResp.ok) {
+                    throw new Error(`Capture failed: ${captureResp.status}`);
+                }
+
+                monoData = { stream_url: streamUrl, decryption_key: decryptionKey, artist, title };
                 document.getElementById('mono-result').style.display = 'block';
-                document.getElementById('mono-title').innerText = data.title || 'Unknown Title';
-                document.getElementById('mono-artist').innerText = data.artist || 'Unknown Artist';
-
-                const command = `ffplay -decryption_key ${data.decryption_key} -i "${data.stream_url}" -nodisp -autoexit`;
+                document.getElementById('mono-title').innerText = title;
+                document.getElementById('mono-artist').innerText = artist;
+                const command = `ffplay -decryption_key ${decryptionKey} -i "${streamUrl}" -nodisp -autoexit`;
                 document.getElementById('mono-command').innerText = command;
-
                 const playBtn = document.getElementById('mono-play-btn');
                 playBtn.style.display = 'inline-block';
-                playBtn.onclick = () => playMonochromeStream(data.stream_url, data.decryption_key);
-            })
-            .catch(err => {
-                alert("Failed to fetch track: " + err.message);
-            });
+                playBtn.onclick = () => playMonochromeStream(streamUrl, decryptionKey);
+
+                alert('Track captured successfully!');
+                renderMonochrome();
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+                console.error(error);
+            }
+        }
+
+        function fetchMonochrome() {
+            fetchMonochromeViaBrowser();
         }
 
         function copyMonoCommand() {
@@ -2377,7 +2519,10 @@ HTML_TEMPLATE = """
                 url += `&bearer_token=${encodeURIComponent(bearerToken)}`;
             }
             audio.src = url;
-            audio.play();
+            audio.play().catch(err => {
+                console.error('Playback error:', err);
+                alert('Playback failed. Check the console for details.');
+            });
             document.getElementById('np-title').innerText = monoData ? monoData.title : 'Monochrome Stream';
             document.getElementById('np-artist').innerText = monoData ? monoData.artist : 'Monochrome';
             document.getElementById('np-cover').src = '';
@@ -2385,7 +2530,7 @@ HTML_TEMPLATE = """
         }
 
         // ---------------------------------------------------------
-        // SETTINGS & ADMIN
+        // SETTINGS & ADMIN (unchanged + wishlist admin)
         // ---------------------------------------------------------
         function renderSettings() {
             let html = `
@@ -2462,12 +2607,45 @@ HTML_TEMPLATE = """
                     <h3 style="margin-top:0; font-size:18px; font-weight:800;">Existing Accounts</h3>
                     <div id="users-table-container">Loading users...</div>
                 </div>
+
+                <!-- Admin Wishlist View -->
+                <h2 style="margin-top:50px; font-size:32px;"><i class="fas fa-star" style="color:var(--accent); font-size:24px; margin-right:12px;"></i>User Wishlists</h2>
+                <div class="admin-card" style="max-width:100%; overflow-x: auto;">
+                    <h3 style="margin-top:0; font-size:18px; font-weight:800;">All Users' Wishlists (Download Requests)</h3>
+                    <div id="admin-wishlists-container">Loading wishlists...</div>
+                </div>
                 `;
             }
 
             html += `</div>`;
             contentDiv.innerHTML = html;
-            if (currentUserIsAdmin) loadUsersTable();
+            if (currentUserIsAdmin) {
+                loadUsersTable();
+                loadAdminWishlists();
+            }
+        }
+
+        function loadAdminWishlists() {
+            fetch('/api/admin/wishlists')
+                .then(res => res.json())
+                .then(data => {
+                    let html = `<table class="admin-table"><tr><th>User</th><th>Songs in Wishlist</th></tr>`;
+                    if (Object.keys(data).length === 0) {
+                        html += `<tr><td colspan="2" style="text-align:center; color:rgba(255,255,255,0.3); padding:30px;">No wishlists yet.</td></tr>`;
+                    } else {
+                        for (let [user, wishlist] of Object.entries(data)) {
+                            html += `<tr>
+                                <td><strong>${user}</strong></td>
+                                <td>${wishlist.length > 0 ? wishlist.join(', ') : 'Empty'}</td>
+                            </tr>`;
+                        }
+                    }
+                    html += `</table>`;
+                    document.getElementById('admin-wishlists-container').innerHTML = html;
+                })
+                .catch(() => {
+                    document.getElementById('admin-wishlists-container').innerHTML = '<p style="color:var(--subtext);">Failed to load wishlists.</p>';
+                });
         }
 
         function uploadMusic(e) {
@@ -2660,11 +2838,6 @@ HTML_TEMPLATE = """
 """
 
 # ---------------------------------------------------------
-# ROUTE HANDLERS (already defined above)
-# ---------------------------------------------------------
-# All route handlers are already defined in the earlier part of the script.
-# The app runs as a single file.
-# ---------------------------------------------------------
 # ROUTE HANDLERS
 # ---------------------------------------------------------
 @app.route('/')
@@ -2697,7 +2870,7 @@ def login():
         password = request.form.get('password', '')
 
         if setup:
-            db["users"] = {username: {'password': generate_password_hash(password), 'is_admin': True, 'likes': [], 'dislikes': [], 'play_counts': {}, 'bg_color': '#080808', 'pfp': '', 'friends': [], 'friend_requests': []}}
+            db["users"] = {username: {'password': generate_password_hash(password), 'is_admin': True, 'likes': [], 'dislikes': [], 'play_counts': {}, 'bg_color': '#080808', 'pfp': '', 'friends': [], 'friend_requests': [], 'wishlist': []}}
             save_db(db)
             session['user'] = username
             session['is_admin'] = True
@@ -3124,7 +3297,8 @@ def admin_users_api():
             "bg_color": "#050505",
             "pfp": "",
             "friends": [],
-            "friend_requests": []
+            "friend_requests": [],
+            "wishlist": []
         }
         save_db(db)
         return jsonify({"success": True})
@@ -3137,6 +3311,52 @@ def admin_users_api():
             save_db(db)
             return jsonify({"success": True})
         return jsonify({"success": False, "error": "Cannot delete active or non-existent user"})
+
+# ---- WISHLIST API ROUTES ----
+@app.route('/api/wishlist', methods=['GET', 'POST'])
+def api_wishlist():
+    if 'user' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    db = load_db()
+    user_data = db["users"].get(session['user'], {})
+    if 'wishlist' not in user_data:
+        user_data['wishlist'] = []
+
+    if request.method == 'GET':
+        return jsonify({"wishlist": user_data['wishlist']})
+
+    elif request.method == 'POST':
+        data = request.json
+        filename = data.get('filename')
+        action = data.get('action')  # 'add' or 'remove'
+        if not filename:
+            return jsonify({"error": "Missing filename"}), 400
+
+        if action == 'add':
+            if filename not in user_data['wishlist']:
+                user_data['wishlist'].append(filename)
+        elif action == 'remove':
+            if filename in user_data['wishlist']:
+                user_data['wishlist'].remove(filename)
+        else:
+            return jsonify({"error": "Invalid action"}), 400
+
+        save_db(db)
+        return jsonify({"success": True})
+
+@app.route('/api/admin/wishlists', methods=['GET'])
+def admin_wishlists():
+    if not session.get('is_admin'):
+        return jsonify({"error": "Unauthorized"}), 403
+
+    db = load_db()
+    all_wishlists = {}
+    for username, user_data in db["users"].items():
+        wishlist = user_data.get('wishlist', [])
+        if wishlist:
+            all_wishlists[username] = wishlist
+    return jsonify(all_wishlists)
 
 # --- MONOCHROME API ROUTES ---
 @app.route('/api/monochrome/fetch', methods=['POST'])
@@ -3217,6 +3437,13 @@ def api_monochrome_capture():
         mono_captures[user_id] = mono_captures[user_id][-20:]
     return jsonify({"success": True, "message": "Captured successfully"})
 
+@app.route('/api/monochrome/captured')
+def api_monochrome_captured():
+    if 'user' not in session:
+        return jsonify([]), 401
+    user_id = session['user']
+    return jsonify(mono_captures.get(user_id, []))
+
 @app.route('/api/monochrome/stream')
 def api_monochrome_stream():
     if 'user' not in session:
@@ -3229,7 +3456,6 @@ def api_monochrome_stream():
     if not stream_url or not key:
         return "Missing parameters", 400
 
-    # Locate ffmpeg binary – prefer the local one
     app_dir = os.path.dirname(os.path.abspath(__file__))
     local_ffmpeg = os.path.join(app_dir, 'ffmpeg')
     ffmpeg_path = None
@@ -3241,7 +3467,6 @@ def api_monochrome_stream():
     if not ffmpeg_path:
         return "FFmpeg not found", 503
 
-    # Build command with explicit MP3 encoding
     cmd = [
         ffmpeg_path,
         '-decryption_key', key,
@@ -3257,7 +3482,6 @@ def api_monochrome_stream():
         cmd.insert(2, '-headers')
         cmd.insert(3, header_str)
 
-    # Log the command (Render logs will show it)
     print(f"🔧 FFmpeg command: {' '.join(cmd)}")
 
     try:
@@ -3268,16 +3492,14 @@ def api_monochrome_stream():
             bufsize=0
         )
 
-        # Log stderr asynchronously
-        import threading
         def log_stderr():
             stderr_data = process.stderr.read()
             if stderr_data:
                 print(f"❌ FFmpeg stderr: {stderr_data.decode()}")
         thread = threading.Thread(target=log_stderr)
+        thread.daemon = True
         thread.start()
 
-        # Return the stdout as a streaming response
         return Response(process.stdout, mimetype='audio/mpeg')
     except Exception as e:
         return f"FFmpeg error: {e}", 500
@@ -3353,6 +3575,9 @@ def api_video():
 def serve_profiles(filename):
     return send_from_directory(PROFILES_DIR, filename)
 
+# ---------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------
 if __name__ == '__main__':
     print(f"🎵 App running on port {PORT}! Open http://localhost:{PORT}")
     app.run(host='0.0.0.0', port=PORT)

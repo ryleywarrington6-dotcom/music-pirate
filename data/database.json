@@ -72,6 +72,17 @@
       "pfp": "",
       "friends": [],
       "friend_requests": []
+    },
+    "Logan": {
+      "password": "scrypt:32768:8:1$cU3Olji3fNnupGx5$bc672c6f8d3296b52e647c0194f9c58551d23baa58714261f67d8d864bd5e17f5429ceb305f1ba17a83751fd51162cc204b9361adb91b94f948a6df6884c4ae9",
+      "is_admin": false,
+      "likes": [],
+      "dislikes": [],
+      "play_counts": {},
+      "bg_color": "#050505",
+      "pfp": "",
+      "friends": [],
+      "friend_requests": []
     }
   },
   "playlists": {},
