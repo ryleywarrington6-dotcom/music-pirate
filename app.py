@@ -105,7 +105,21 @@ def save_json_file(filepath, data):
         json.dump(data, f, indent=2)
 
 def load_db():
-    return load_json_file(DB_FILE, {"users": {}, "playlists": {}, "messages": {}})
+    db = load_json_file(DB_FILE, {"users": {}, "playlists": {}, "messages": {}})
+    # Migrate old wishlist format (list of strings) to new format (list of objects)
+    for username, user_data in db.get("users", {}).items():
+        if "wishlist" in user_data:
+            old_wishlist = user_data["wishlist"]
+            if old_wishlist and isinstance(old_wishlist, list):
+                new_wishlist = []
+                for item in old_wishlist:
+                    if isinstance(item, str):
+                        # assume it's a local filename
+                        new_wishlist.append({"type": "local", "filename": item})
+                    elif isinstance(item, dict):
+                        new_wishlist.append(item)
+                user_data["wishlist"] = new_wishlist
+    return db
 
 def save_db(db):
     save_json_file(DB_FILE, db)
@@ -380,6 +394,47 @@ def search_youtube_video(artist, song):
     video_cache[cache_key] = None
     save_json_file(VIDEO_CACHE_FILE, video_cache)
     return None
+
+# New function for YouTube search (multiple results)
+def search_youtube(query, max_results=20):
+    """Return a list of video info dicts from YouTube search."""
+    url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
+    results = []
+    try:
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+        })
+        with urllib.request.urlopen(req, timeout=8.0) as resp:
+            html = resp.read().decode('utf-8')
+            video_ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+            titles = re.findall(r'"title":\{"runs":\[\{"text":"([^"]+?)"\]\}', html)
+            thumbnails = re.findall(r'"thumbnail":\{\"thumbnails\":\[\{\"url":"([^"]+?)"', html)
+            channel_names = re.findall(r'"ownerText":\{"runs":\[\{"text":"([^"]+?)"\]\}', html)
+
+            for i in range(min(len(video_ids), len(titles), len(thumbnails), max_results)):
+                vid = video_ids[i]
+                title = titles[i]
+                thumb = thumbnails[i]
+                artist = "Unknown Artist"
+                if i < len(channel_names):
+                    artist = channel_names[i]
+                if artist == "Unknown Artist":
+                    parts = re.split(r'\s*[-–—:]\s*', title, maxsplit=1)
+                    if len(parts) >= 2:
+                        artist = parts[0].strip()
+                        title = parts[1].strip()
+                results.append({
+                    "youtube_id": vid,
+                    "title": title,
+                    "artist": artist,
+                    "thumbnail": thumb
+                })
+                if len(results) >= max_results:
+                    break
+    except Exception as e:
+        print(f"YouTube search error: {e}")
+    return results
 
 # ---------------------------------------------------------
 # MONOCHROME INTEGRATION HELPERS
@@ -693,6 +748,8 @@ HTML_TEMPLATE = r"""
         .wishlist-btn.active { color: #ffcc00; text-shadow: 0 0 15px rgba(255, 204, 0, 0.6); }
         .wishlist-btn:hover { transform: scale(1.2); }
 
+        .external-badge { background: rgba(255, 204, 0, 0.2); color: #ffcc00; padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 700; margin-left: 6px; }
+
         @media (max-width: 768px) {
             body { flex-direction: column; overflow: auto; }
             .sidebar { position: fixed; bottom: 88px; left: 0; right: 0; width: 100%; height: auto; flex-direction: row; justify-content: space-around; align-items: center; padding: 6px 8px; background: rgba(10, 10, 10, 0.95); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px); border-top: 1px solid rgba(255,255,255,0.08); border-right: none; z-index: 999; gap: 0; }
@@ -775,6 +832,7 @@ HTML_TEMPLATE = r"""
 
         <div class="nav-section-title">Discover</div>
         <div class="nav-item active" onclick="switchView('home', this)"><i class="fas fa-home"></i> <span>Home</span></div>
+        <div class="nav-item" onclick="switchView('discover', this)"><i class="fas fa-search-plus"></i> <span>Discover</span></div>
         <div class="nav-item" onclick="document.getElementById('global-search').focus();"><i class="fas fa-search"></i> <span>Search</span></div>
         <div class="nav-item" onclick="switchView('artists', this)"><i class="fas fa-microphone"></i> <span>Artists</span></div>
         <div class="nav-item" onclick="switchView('playlists', this)"><i class="fas fa-list-music"></i> <span>Playlists</span></div>
@@ -931,8 +989,11 @@ HTML_TEMPLATE = r"""
         let canvasCtx = visualizerCanvas.getContext('2d');
         let visualizerInitialized = false;
 
-        // Wishlist state
+        // Wishlist state (array of objects: {type: 'local'|'external', ...})
         let wishlist = [];
+
+        // Current external track being played (for YouTube)
+        let currentExternalTrack = null;
 
         const contentDiv = document.getElementById('main-content');
         const audio = document.getElementById('audio-player');
@@ -1276,6 +1337,9 @@ HTML_TEMPLATE = r"""
         function safeId(str) { return encodeURIComponent(str).replace(/[^a-zA-Z0-9]/g, ''); }
 
         function getCoverUrl(song) {
+            if (song.type === 'external') {
+                return song.thumbnail || '';
+            }
             return `/api/cover?file=${encodeURIComponent(song.filename)}`;
         }
 
@@ -1284,12 +1348,12 @@ HTML_TEMPLATE = r"""
                 navigator.mediaSession.metadata = new MediaMetadata({
                     title: songObj.title,
                     artist: songObj.artist,
-                    album: 'Streamer Pro',
+                    album: songObj.type === 'external' ? 'YouTube' : 'Streamer Pro',
                     artwork: [ { src: coverUrl, sizes: '500x500', type: 'image/jpeg' } ]
                 });
 
-                navigator.mediaSession.setActionHandler('play', () => { audio.play(); });
-                navigator.mediaSession.setActionHandler('pause', () => { audio.pause(); });
+                navigator.mediaSession.setActionHandler('play', () => { togglePlay(); });
+                navigator.mediaSession.setActionHandler('pause', () => { togglePlay(); });
                 navigator.mediaSession.setActionHandler('previoustrack', prevTrack);
                 navigator.mediaSession.setActionHandler('nexttrack', nextTrack);
             }
@@ -1304,6 +1368,7 @@ HTML_TEMPLATE = r"""
             }
         }
 
+        // Modified audio events to support external playback via YouTube
         audio.addEventListener('play', () => {
             initVisualizer();
             if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
@@ -1319,7 +1384,7 @@ HTML_TEMPLATE = r"""
             eqAnim.classList.remove('paused');
             eqAnim.classList.add('playing');
 
-            if (ytPlayer && typeof ytPlayer.playVideo === 'function') {
+            if (currentExternalTrack && ytPlayer && typeof ytPlayer.playVideo === 'function') {
                 ytPlayer.playVideo();
             }
         });
@@ -1335,7 +1400,7 @@ HTML_TEMPLATE = r"""
 
             eqAnim.classList.add('paused');
 
-            if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
+            if (currentExternalTrack && ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
                 ytPlayer.pauseVideo();
             }
         });
@@ -1350,13 +1415,6 @@ HTML_TEMPLATE = r"""
             progressBar.value = percent;
             updateSliderFill(progressBar);
             timeCurrentEl.innerText = formatTime(audio.currentTime);
-
-            if (ytPlayer && typeof ytPlayer.getCurrentTime === 'function' && typeof ytPlayer.getPlayerState === 'function' && ytPlayer.getPlayerState() === YT.PlayerState.PLAYING) {
-                let ytTime = ytPlayer.getCurrentTime();
-                if (Math.abs(ytTime - audio.currentTime) > 2.0) {
-                    ytPlayer.seekTo(audio.currentTime, true);
-                }
-            }
 
             if (syncedLyrics.length > 0) {
                 let newIndex = syncedLyrics.findIndex(l => l.time > audio.currentTime) - 1;
@@ -1419,9 +1477,6 @@ HTML_TEMPLATE = r"""
             if (!audio.duration) return;
             audio.currentTime = (this.value / 100) * audio.duration;
             updateSliderFill(this);
-            if (ytPlayer && typeof ytPlayer.seekTo === 'function') {
-                ytPlayer.seekTo(audio.currentTime, true);
-            }
         });
 
         function toggleMute() {
@@ -1441,8 +1496,11 @@ HTML_TEMPLATE = r"""
 
         function togglePlay() {
             animateButton('play-btn-wrapper');
-            if (audio.paused) audio.play();
-            else audio.pause();
+            if (audio.paused) {
+                audio.play();
+            } else {
+                audio.pause();
+            }
         }
 
         function toggleShuffle() {
@@ -1483,7 +1541,6 @@ HTML_TEMPLATE = r"""
             allSongs = data.songs;
             songStats = data.stats;
             processArtists(allSongs);
-            // Load wishlist after user is known
             loadWishlist().then(() => {
                 switchView('home');
             });
@@ -1514,6 +1571,7 @@ HTML_TEMPLATE = r"""
             }
 
             if (view === 'home') renderHome();
+            if (view === 'discover') renderDiscover();
             if (view === 'artists') renderArtists();
             if (view === 'playlists') renderPlaylists();
             if (view === 'messages') renderMessages();
@@ -1545,7 +1603,12 @@ HTML_TEMPLATE = r"""
             if (!isShuffle) originalQueue = [...queue];
             currentIndex = index;
             isRadioMode = false;
-            loadTrack(currentQueue[currentIndex]);
+            let song = currentQueue[currentIndex];
+            if (song.type === 'external') {
+                playExternal(song);
+            } else {
+                loadTrack(song);
+            }
         }
 
         function playQueueByFilenames(filenames, index) {
@@ -1560,228 +1623,47 @@ HTML_TEMPLATE = r"""
             }
         }
 
-        function renderRadio() {
-            contentDiv.innerHTML = `
-                <div class="fade-in" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height: 80vh; text-align:center; padding: 20px;">
-                    <div style="position:relative; width: 160px; height: 160px; display:flex; align-items:center; justify-content:center; margin-bottom: 30px;">
-                        <div class="radio-glow" style="position:absolute; width:100%; height:100%; background:var(--accent); border-radius:50%; opacity:0.3; filter:blur(30px); animation: radioPulse 2s infinite alternate;"></div>
-                        <i class="fas fa-broadcast-tower" style="font-size: 64px; color: var(--text); z-index: 2; filter: drop-shadow(0 0 10px rgba(255,255,255,0.5));"></i>
-                    </div>
-                    <h2 style="font-size: 40px; margin-bottom: 16px; font-weight: 800; letter-spacing: -1px;">Infinite Radio</h2>
-                    <p style="color: var(--subtext); font-size: 16px; max-width: 450px; line-height: 1.6; margin-bottom: 30px; font-weight:500;">
-                        An endless stream tailored to your listening habits, blending your favorites with seamless discovery.
-                    </p>
-                    <div id="radio-current-status" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 16px 24px; border-radius: 30px; display: flex; align-items: center; gap: 12px; font-weight: 700; box-shadow: 0 10px 25px rgba(0,0,0,0.3); font-size:14px;">
-                        <i class="fas fa-satellite-dish" style="color: var(--accent);"></i> Tuning in...
-                    </div>
-                </div>
-            `;
-        }
-
-        function updateRadioUI() {
-            if (isRadioMode) {
-                const statusEl = document.getElementById('radio-current-status');
-                if (statusEl && currentSongObj) {
-                    statusEl.innerHTML = `<i class="fas fa-volume-up" style="color: var(--accent);"></i> Broadcasting: <span style="color:white; margin-left:6px;">${currentSongObj.title}</span> <span style="color:var(--subtext); margin-left:6px;">by ${currentSongObj.artist}</span>`;
-                }
-            }
-        }
-
-        function startRadio() {
-            isRadioMode = true;
-            radioHistory = [];
-            currentQueue = [];
-
-            document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
-            let navItems = document.querySelectorAll('.nav-item');
-            if(navItems.length > 4) navItems[4].classList.add('active');
-
-            if (!currentSongObj) {
-                nextTrack();
-            } else {
-                updateRadioUI();
-            }
-        }
-
-        function loadTrack(songObj) {
-            if (!songObj) return;
-            currentSongObj = songObj;
-
-            let fileUrl = `/play/` + songObj.filename.split('/').map(encodeURIComponent).join('/');
-            audio.src = fileUrl;
-
-            document.getElementById('np-title').innerText = songObj.title;
-            document.getElementById('np-artist').innerText = songObj.artist;
-            document.getElementById('rp-title').innerText = songObj.title;
-            document.getElementById('rp-artist').innerText = songObj.artist;
-
-            let coverUrl = getCoverUrl(songObj);
+        // ---- EXTERNAL PLAYBACK ----
+        function playExternal(track) {
+            // track: { type: 'external', youtube_id, title, artist, thumbnail }
+            currentExternalTrack = track;
+            // Set UI
+            document.getElementById('np-title').innerText = track.title;
+            document.getElementById('np-artist').innerText = track.artist;
+            document.getElementById('rp-title').innerText = track.title;
+            document.getElementById('rp-artist').innerText = track.artist;
+            let coverUrl = track.thumbnail || '';
             document.getElementById('np-cover').src = coverUrl;
             document.getElementById('rp-cover').src = coverUrl;
             document.getElementById('rp-cover-glow').style.backgroundImage = `url("${coverUrl}")`;
+            document.getElementById('download-btn').style.display = 'none';
+            updateMediaSession(track, coverUrl);
 
-            document.getElementById('download-btn').href = `/download/` + songObj.filename.split('/').map(encodeURIComponent).join('/');
-            document.getElementById('download-btn').style.display = 'inline-block';
-
-            updateMediaSession(songObj, coverUrl);
-            fetchStatusAndLog(songObj.filename);
-
-            audio.play();
-            renderQueue();
-
-            fetch(`/api/video?artist=${encodeURIComponent(songObj.artist)}&song=${encodeURIComponent(songObj.title)}`)
-                .then(res => res.json())
-                .then(data => {
-                    if(data.youtube_id && ytPlayerReady) {
-                        if(!ytPlayer) {
-                            ytPlayer = new YT.Player('rp-video', {
-                                videoId: data.youtube_id,
-                                playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0, 'modestbranding': 1, 'rel': 0, 'showinfo': 0, 'mute': 1 },
-                                events: {
-                                    'onReady': (e) => { e.target.playVideo(); }
-                                }
-                            });
-                        } else {
-                            ytPlayer.loadVideoById(data.youtube_id);
-                        }
-                    } else if (ytPlayer) {
-                        ytPlayer.stopVideo();
-                    }
-                });
-
-            lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;"><i class="fas fa-spinner fa-spin"></i> Searching for lyrics...</div>';
-            syncedLyrics = [];
-            activeLyricIndex = -1;
-
-            let query = `${songObj.artist} ${songObj.title}`.toLowerCase();
-            let cleanQuery = query.replace(/\s*\(feat\..*?\)/g, '').replace(/\s*ft\..*$/g, '').replace(/[^a-z0-9 ]/g, '');
-
-            fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(cleanQuery)}`)
-                .then(r => r.json())
-                .then(results => {
-                    if (results && results.length > 0) {
-                        let bestMatch = results.find(r => r.syncedLyrics);
-                        if (bestMatch && bestMatch.syncedLyrics) {
-                            let parsed = parseLrc(bestMatch.syncedLyrics);
-                            syncedLyrics = parsed;
-                            renderLyrics(parsed);
-                        } else if (bestMatch && bestMatch.plainLyrics) {
-                            renderPlainLyrics(bestMatch.plainLyrics);
-                        } else {
-                            lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">No lyrics found for this track.</div>';
-                        }
-                    } else {
-                        lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">No lyrics found for this track.</div>';
-                    }
-                }).catch(() => {
-                    lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">Failed to load lyrics.</div>';
-                });
-        }
-
-        function parseLrc(lrcString) {
-            const lines = lrcString.split('\\n');
-            const parsed = [];
-            const timeRegex = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
-
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                const match = timeRegex.exec(line);
-                if (match) {
-                    const minutes = parseInt(match[1], 10);
-                    const seconds = parseInt(match[2], 10);
-                    const milliseconds = parseInt(match[3].padEnd(3, '0'), 10);
-                    const timeInSeconds = (minutes * 60) + seconds + (milliseconds / 1000);
-
-                    const text = line.replace(timeRegex, '').trim();
-                    if(text) {
-                        const words = text.split(' ');
-                        const wordTimings = [];
-                        let accum = 0;
-                        for(let w=0; w<words.length; w++) {
-                            const chunk = 1 / words.length;
-                            wordTimings.push({ word: words[w], startPercent: accum, endPercent: accum + chunk });
-                            accum += chunk;
-                        }
-
-                        parsed.push({ time: timeInSeconds, text: text, words: words, wordTimings: wordTimings, duration: 3.0 });
-                    }
-                }
-            }
-
-            for(let i=0; i<parsed.length - 1; i++) {
-                parsed[i].duration = parsed[i+1].time - parsed[i].time;
-                if(parsed[i].duration <= 0 || parsed[i].duration > 10) parsed[i].duration = 3.0;
-            }
-
-            return parsed;
-        }
-
-        function renderLyrics(parsedLines) {
-            let html = '<div style="height: 50%;"></div>';
-            parsedLines.forEach((line, index) => {
-                let wordsHtml = line.wordTimings.map(wt => `<span class="lyric-word">${wt.word}</span>`).join(' ');
-                html += `<div class="lyric-line" id="lyric-${index}" onclick="seekTo(${line.time})">${wordsHtml}</div>`;
-            });
-            html += '<div style="height: 50%;"></div>';
-            lyricsContainer.innerHTML = html;
-        }
-
-        function renderPlainLyrics(text) {
-            let html = '<div style="height: 20px;"></div>';
-            text.split('\\n').forEach(line => {
-                if(line.trim()) html += `<div class="lyric-line" style="cursor:default;">${line.replace(/</g, '&lt;')}</div>`;
-                else html += `<br>`;
-            });
-            html += '<div style="height: 50px;"></div>';
-            lyricsContainer.innerHTML = html;
-        }
-
-        function seekTo(timeSeconds) {
-            if(!audio.duration) return;
-            audio.currentTime = timeSeconds;
-            if(ytPlayer && typeof ytPlayer.seekTo === 'function') ytPlayer.seekTo(timeSeconds, true);
-        }
-
-        function nextTrack() {
-            if (isRadioMode) {
-                if (currentSongObj) radioHistory.push(currentSongObj.filename);
-                if (radioHistory.length > 30) radioHistory.shift();
-
-                let histParam = radioHistory.map(encodeURIComponent).join(',');
-                let artistParam = currentSongObj ? encodeURIComponent(currentSongObj.artist) : '';
-
-                fetch('/api/radio/next?history=' + histParam + '&current_artist=' + artistParam)
-                    .then(res => res.json())
-                    .then(data => {
-                        if(data.song) {
-                            loadTrack(data.song);
-                            updateRadioUI();
+            if (ytPlayerReady) {
+                if (!ytPlayer) {
+                    ytPlayer = new YT.Player('rp-video', {
+                        videoId: track.youtube_id,
+                        playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0, 'modestbranding': 1, 'rel': 0, 'showinfo': 0, 'mute': 1 },
+                        events: {
+                            'onReady': (e) => { e.target.playVideo(); }
                         }
                     });
-            } else {
-                if (currentQueue.length === 0) return;
-                currentIndex++;
-                if (currentIndex >= currentQueue.length) {
-                    currentIndex = 0;
-                    if (!isRepeat) {
-                        audio.pause();
-                        renderQueue();
-                        return;
-                    }
+                } else {
+                    ytPlayer.loadVideoById(track.youtube_id);
                 }
-                loadTrack(currentQueue[currentIndex]);
             }
-        }
 
-        function prevTrack() {
-            if (audio.currentTime > 3) {
-                audio.currentTime = 0;
-                if(ytPlayer && typeof ytPlayer.seekTo === 'function') ytPlayer.seekTo(0, true);
-            } else if (!isRadioMode && currentQueue.length > 0) {
-                currentIndex--;
-                if (currentIndex < 0) currentIndex = currentQueue.length - 1;
-                loadTrack(currentQueue[currentIndex]);
-            }
+            audio.src = 'data:audio/mpeg;base64,//uQxAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAEAAABh4C' +
+                '/////////////////////////////////////////////////////////////////////////////////////////////////////////////';
+            audio.pause();
+            progressBar.disabled = true;
+            timeCurrentEl.innerText = '--:--';
+            timeTotalEl.innerText = '--:--';
+            document.getElementById('np-artist').innerHTML = track.artist + ' <span class="external-badge">YouTube</span>';
+            lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">Live lyrics not available for external tracks.</div>';
+            syncedLyrics = [];
+            activeLyricIndex = -1;
+            audio.play();
         }
 
         // ---- Wishlist Functions ----
@@ -1795,28 +1677,49 @@ HTML_TEMPLATE = r"""
             } catch(e) { console.warn("Failed to load wishlist", e); }
         }
 
-        async function toggleWishlist(filename) {
-            const isIn = wishlist.includes(filename);
-            const action = isIn ? 'remove' : 'add';
+        async function toggleWishlist(item) {
+            let payload;
+            if (typeof item === 'string') {
+                payload = { type: 'local', filename: item };
+            } else if (item.type === 'external') {
+                payload = { type: 'external', youtube_id: item.youtube_id, title: item.title, artist: item.artist, thumbnail: item.thumbnail };
+            } else {
+                return;
+            }
+
+            const exists = wishlist.some(w => {
+                if (payload.type === 'local' && w.type === 'local' && w.filename === payload.filename) return true;
+                if (payload.type === 'external' && w.type === 'external' && w.youtube_id === payload.youtube_id) return true;
+                return false;
+            });
+
+            const action = exists ? 'remove' : 'add';
+
             try {
                 const res = await fetch('/api/wishlist', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filename, action })
+                    body: JSON.stringify({ action, item: payload })
                 });
                 if (res.ok) {
-                    if (action === 'add') wishlist.push(filename);
-                    else wishlist = wishlist.filter(f => f !== filename);
-                    // Refresh UI if on wishlist view
+                    if (action === 'add') wishlist.push(payload);
+                    else wishlist = wishlist.filter(w => {
+                        if (payload.type === 'local') return !(w.type === 'local' && w.filename === payload.filename);
+                        if (payload.type === 'external') return !(w.type === 'external' && w.youtube_id === payload.youtube_id);
+                        return true;
+                    });
                     if (document.querySelector('.nav-item.active') && document.querySelector('.nav-item.active').textContent.trim() === 'Wishlist') {
                         renderWishlist();
                     } else {
-                        // Update all wishlist buttons
                         document.querySelectorAll('.wishlist-btn').forEach(btn => {
                             const fname = btn.dataset.filename;
+                            const ytid = btn.dataset.ytid;
                             if (fname) {
-                                if (wishlist.includes(fname)) btn.classList.add('active');
-                                else btn.classList.remove('active');
+                                const inWish = wishlist.some(w => w.type === 'local' && w.filename === fname);
+                                btn.classList.toggle('active', inWish);
+                            } else if (ytid) {
+                                const inWish = wishlist.some(w => w.type === 'external' && w.youtube_id === ytid);
+                                btn.classList.toggle('active', inWish);
                             }
                         });
                     }
@@ -1827,8 +1730,10 @@ HTML_TEMPLATE = r"""
         }
 
         function renderWishlist() {
-            const wishlistSongs = wishlist.map(f => allSongs.find(s => s.filename === f)).filter(Boolean);
-            if (wishlistSongs.length === 0) {
+            let localItems = wishlist.filter(w => w.type === 'local').map(w => allSongs.find(s => s.filename === w.filename)).filter(Boolean);
+            let externalItems = wishlist.filter(w => w.type === 'external');
+
+            if (localItems.length === 0 && externalItems.length === 0) {
                 contentDiv.innerHTML = `
                     <div class="fade-in" style="text-align:center; padding: 80px 20px;">
                         <i class="fas fa-star" style="font-size: 64px; color: rgba(255,255,255,0.1); margin-bottom: 30px;"></i>
@@ -1846,12 +1751,13 @@ HTML_TEMPLATE = r"""
                     <p style="color: var(--subtext); margin-bottom: 24px;">Songs you've marked for future download. Admin can see all wishlists.</p>
                     <div class="grid">
             `;
-            wishlistSongs.forEach(song => {
+
+            localItems.forEach(song => {
                 const coverUrl = getCoverUrl(song);
                 const cleanTitle = song.title.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
                 const cleanArtist = song.artist.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
                 const cleanFilename = song.filename.replace(/'/g, "\\'");
-                const isIn = wishlist.includes(song.filename);
+                const isIn = wishlist.some(w => w.type === 'local' && w.filename === song.filename);
                 html += `
                     <div class="card" style="text-align:center;">
                         <div class="card-img-container" onclick="playSongByFilename('${cleanFilename}')">
@@ -1870,11 +1776,104 @@ HTML_TEMPLATE = r"""
                     </div>
                 `;
             });
+
+            externalItems.forEach(track => {
+                const coverUrl = track.thumbnail || '';
+                const cleanTitle = track.title.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
+                const cleanArtist = track.artist.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
+                const isIn = wishlist.some(w => w.type === 'external' && w.youtube_id === track.youtube_id);
+                html += `
+                    <div class="card" style="text-align:center;">
+                        <div class="card-img-container" onclick="playExternal({type:'external', youtube_id:'${track.youtube_id}', title:'${cleanTitle}', artist:'${cleanArtist}', thumbnail:'${coverUrl}'})">
+                            ${coverUrl ? `<img src="${coverUrl}" loading="lazy">` : '<i class="fas fa-youtube" style="font-size:40px; color:rgba(255,0,0,0.3);"></i>'}
+                            <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
+                        </div>
+                        <div class="card-info">
+                            <div class="card-title" title="${cleanTitle}">${cleanTitle}</div>
+                            <div class="card-artist" title="${cleanArtist}">${cleanArtist} <span class="external-badge">YouTube</span></div>
+                            <div style="display:flex; justify-content:center; gap: 8px; margin-top: 8px;">
+                                <button class="wishlist-btn ${isIn ? 'active' : ''}" data-ytid="${track.youtube_id}" onclick="toggleWishlist({type:'external', youtube_id:'${track.youtube_id}', title:'${cleanTitle}', artist:'${cleanArtist}', thumbnail:'${coverUrl}'})" title="Toggle Wishlist"><i class="fas fa-star"></i></button>
+                                <button class="action-btn" style="padding: 6px 10px;" onclick="playExternal({type:'external', youtube_id:'${track.youtube_id}', title:'${cleanTitle}', artist:'${cleanArtist}', thumbnail:'${coverUrl}'})"><i class="fas fa-play"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
             html += `</div></div>`;
             contentDiv.innerHTML = html;
         }
 
-        // ---- End Wishlist ----
+        // ---- Discover View ----
+        function renderDiscover() {
+            contentDiv.innerHTML = `
+                <div class="fade-in" style="max-width: 900px; margin: 0 auto;">
+                    <h2 style="display: flex; align-items: center; gap: 12px;">
+                        <i class="fas fa-search-plus" style="color: var(--accent);"></i> Discover Music
+                    </h2>
+                    <p style="color: var(--subtext); margin-bottom: 24px;">Search for any song on YouTube, play it instantly, and add it to your wishlist for the admin to manually source.</p>
+                    <div style="display: flex; gap: 12px; margin-bottom: 24px;">
+                        <input type="text" id="discover-search-input" class="mono-url-input" placeholder="Search for a song..." style="flex: 1; padding: 14px 20px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; font-family: 'Outfit', sans-serif;">
+                        <button class="action-btn" style="background: var(--accent); color: black; padding: 14px 28px; font-weight: 800; border-radius: 30px; box-shadow: 0 5px 15px rgba(29,185,84,0.3);" onclick="searchYouTube()">
+                            <i class="fas fa-search"></i> Search
+                        </button>
+                    </div>
+                    <div id="discover-results" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 24px;">
+                        <div style="text-align:center; padding: 40px; color: rgba(255,255,255,0.3); grid-column: 1 / -1;">Search for a song to see results.</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function searchYouTube() {
+            const input = document.getElementById('discover-search-input');
+            const query = input.value.trim();
+            if (!query) return alert("Please enter a search term.");
+
+            const resultsDiv = document.getElementById('discover-results');
+            resultsDiv.innerHTML = '<div style="text-align:center; padding: 40px; color:rgba(255,255,255,0.5); grid-column: 1 / -1;"><i class="fas fa-spinner fa-spin"></i> Searching...</div>';
+
+            try {
+                const resp = await fetch(`/api/search/youtube?q=${encodeURIComponent(query)}`);
+                const data = await resp.json();
+                if (data.error) {
+                    resultsDiv.innerHTML = `<div style="text-align:center; padding: 40px; color:#ff5555; grid-column: 1 / -1;">Error: ${data.error}</div>`;
+                    return;
+                }
+                if (data.results.length === 0) {
+                    resultsDiv.innerHTML = `<div style="text-align:center; padding: 40px; color:rgba(255,255,255,0.4); grid-column: 1 / -1;">No results found.</div>`;
+                    return;
+                }
+
+                let html = '';
+                data.results.forEach(item => {
+                    const cleanTitle = item.title.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
+                    const cleanArtist = item.artist.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
+                    const isInWishlist = wishlist.some(w => w.type === 'external' && w.youtube_id === item.youtube_id);
+                    html += `
+                        <div class="card" style="text-align:center;">
+                            <div class="card-img-container" onclick="playExternal({type:'external', youtube_id:'${item.youtube_id}', title:'${cleanTitle}', artist:'${cleanArtist}', thumbnail:'${item.thumbnail}'})">
+                                <img src="${item.thumbnail}" loading="lazy">
+                                <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
+                            </div>
+                            <div class="card-info">
+                                <div class="card-title" title="${cleanTitle}">${cleanTitle}</div>
+                                <div class="card-artist" title="${cleanArtist}">${cleanArtist}</div>
+                                <div style="display:flex; justify-content:center; gap: 8px; margin-top: 8px;">
+                                    <button class="wishlist-btn ${isInWishlist ? 'active' : ''}" data-ytid="${item.youtube_id}" onclick="toggleWishlist({type:'external', youtube_id:'${item.youtube_id}', title:'${cleanTitle}', artist:'${cleanArtist}', thumbnail:'${item.thumbnail}'})" title="Add to Wishlist"><i class="fas fa-star"></i></button>
+                                    <button class="action-btn" style="padding: 6px 10px;" onclick="playExternal({type:'external', youtube_id:'${item.youtube_id}', title:'${cleanTitle}', artist:'${cleanArtist}', thumbnail:'${item.thumbnail}'})"><i class="fas fa-play"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                resultsDiv.innerHTML = html;
+            } catch (e) {
+                resultsDiv.innerHTML = `<div style="text-align:center; padding: 40px; color:#ff5555; grid-column: 1 / -1;">Failed to search: ${e.message}</div>`;
+            }
+        }
+
+        // ---- End Discover ----
 
         function buildCardsHTML(songsArray, isRow = false, playlistToken = null) {
             let html = isRow ? `<div class="scroll-row">` : `<div class="grid">`;
@@ -1885,7 +1884,7 @@ HTML_TEMPLATE = r"""
                 let cleanTitle = song.title.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
                 let cleanArtist = song.artist.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
                 let cleanFilename = song.filename.replace(/'/g, "\\'");
-                const isInWishlist = wishlist.includes(song.filename);
+                const isInWishlist = wishlist.some(w => w.type === 'local' && w.filename === song.filename);
 
                 html += `
                 <div class="card">
@@ -2308,8 +2307,242 @@ HTML_TEMPLATE = r"""
             }).then(() => loadChatHistory());
         }
 
+        // ---- Radio ----
+        function renderRadio() {
+            contentDiv.innerHTML = `
+                <div class="fade-in" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height: 80vh; text-align:center; padding: 20px;">
+                    <div style="position:relative; width: 160px; height: 160px; display:flex; align-items:center; justify-content:center; margin-bottom: 30px;">
+                        <div class="radio-glow" style="position:absolute; width:100%; height:100%; background:var(--accent); border-radius:50%; opacity:0.3; filter:blur(30px); animation: radioPulse 2s infinite alternate;"></div>
+                        <i class="fas fa-broadcast-tower" style="font-size: 64px; color: var(--text); z-index: 2; filter: drop-shadow(0 0 10px rgba(255,255,255,0.5));"></i>
+                    </div>
+                    <h2 style="font-size: 40px; margin-bottom: 16px; font-weight: 800; letter-spacing: -1px;">Infinite Radio</h2>
+                    <p style="color: var(--subtext); font-size: 16px; max-width: 450px; line-height: 1.6; margin-bottom: 30px; font-weight:500;">
+                        An endless stream tailored to your listening habits, blending your favorites with seamless discovery.
+                    </p>
+                    <div id="radio-current-status" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 16px 24px; border-radius: 30px; display: flex; align-items: center; gap: 12px; font-weight: 700; box-shadow: 0 10px 25px rgba(0,0,0,0.3); font-size:14px;">
+                        <i class="fas fa-satellite-dish" style="color: var(--accent);"></i> Tuning in...
+                    </div>
+                </div>
+            `;
+        }
+
+        function updateRadioUI() {
+            if (isRadioMode) {
+                const statusEl = document.getElementById('radio-current-status');
+                if (statusEl && currentSongObj) {
+                    statusEl.innerHTML = `<i class="fas fa-volume-up" style="color: var(--accent);"></i> Broadcasting: <span style="color:white; margin-left:6px;">${currentSongObj.title}</span> <span style="color:var(--subtext); margin-left:6px;">by ${currentSongObj.artist}</span>`;
+                }
+            }
+        }
+
+        function startRadio() {
+            isRadioMode = true;
+            radioHistory = [];
+            currentQueue = [];
+
+            document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
+            let navItems = document.querySelectorAll('.nav-item');
+            if(navItems.length > 4) navItems[4].classList.add('active');
+
+            if (!currentSongObj) {
+                nextTrack();
+            } else {
+                updateRadioUI();
+            }
+        }
+
+        function loadTrack(songObj) {
+            if (!songObj) return;
+            currentSongObj = songObj;
+            currentExternalTrack = null;
+
+            let fileUrl = `/play/` + songObj.filename.split('/').map(encodeURIComponent).join('/');
+            audio.src = fileUrl;
+
+            document.getElementById('np-title').innerText = songObj.title;
+            document.getElementById('np-artist').innerText = songObj.artist;
+            document.getElementById('rp-title').innerText = songObj.title;
+            document.getElementById('rp-artist').innerText = songObj.artist;
+
+            let coverUrl = getCoverUrl(songObj);
+            document.getElementById('np-cover').src = coverUrl;
+            document.getElementById('rp-cover').src = coverUrl;
+            document.getElementById('rp-cover-glow').style.backgroundImage = `url("${coverUrl}")`;
+
+            document.getElementById('download-btn').href = `/download/` + songObj.filename.split('/').map(encodeURIComponent).join('/');
+            document.getElementById('download-btn').style.display = 'inline-block';
+
+            updateMediaSession(songObj, coverUrl);
+            fetchStatusAndLog(songObj.filename);
+
+            audio.play();
+            renderQueue();
+
+            fetch(`/api/video?artist=${encodeURIComponent(songObj.artist)}&song=${encodeURIComponent(songObj.title)}`)
+                .then(res => res.json())
+                .then(data => {
+                    if(data.youtube_id && ytPlayerReady) {
+                        if(!ytPlayer) {
+                            ytPlayer = new YT.Player('rp-video', {
+                                videoId: data.youtube_id,
+                                playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0, 'modestbranding': 1, 'rel': 0, 'showinfo': 0, 'mute': 1 },
+                                events: {
+                                    'onReady': (e) => { e.target.playVideo(); }
+                                }
+                            });
+                        } else {
+                            ytPlayer.loadVideoById(data.youtube_id);
+                        }
+                    } else if (ytPlayer) {
+                        ytPlayer.stopVideo();
+                    }
+                });
+
+            lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;"><i class="fas fa-spinner fa-spin"></i> Searching for lyrics...</div>';
+            syncedLyrics = [];
+            activeLyricIndex = -1;
+
+            let query = `${songObj.artist} ${songObj.title}`.toLowerCase();
+            let cleanQuery = query.replace(/\s*\(feat\..*?\)/g, '').replace(/\s*ft\..*$/g, '').replace(/[^a-z0-9 ]/g, '');
+
+            fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(cleanQuery)}`)
+                .then(r => r.json())
+                .then(results => {
+                    if (results && results.length > 0) {
+                        let bestMatch = results.find(r => r.syncedLyrics);
+                        if (bestMatch && bestMatch.syncedLyrics) {
+                            let parsed = parseLrc(bestMatch.syncedLyrics);
+                            syncedLyrics = parsed;
+                            renderLyrics(parsed);
+                        } else if (bestMatch && bestMatch.plainLyrics) {
+                            renderPlainLyrics(bestMatch.plainLyrics);
+                        } else {
+                            lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">No lyrics found for this track.</div>';
+                        }
+                    } else {
+                        lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">No lyrics found for this track.</div>';
+                    }
+                }).catch(() => {
+                    lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">Failed to load lyrics.</div>';
+                });
+        }
+
+        function parseLrc(lrcString) {
+            const lines = lrcString.split('\\n');
+            const parsed = [];
+            const timeRegex = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const match = timeRegex.exec(line);
+                if (match) {
+                    const minutes = parseInt(match[1], 10);
+                    const seconds = parseInt(match[2], 10);
+                    const milliseconds = parseInt(match[3].padEnd(3, '0'), 10);
+                    const timeInSeconds = (minutes * 60) + seconds + (milliseconds / 1000);
+
+                    const text = line.replace(timeRegex, '').trim();
+                    if(text) {
+                        const words = text.split(' ');
+                        const wordTimings = [];
+                        let accum = 0;
+                        for(let w=0; w<words.length; w++) {
+                            const chunk = 1 / words.length;
+                            wordTimings.push({ word: words[w], startPercent: accum, endPercent: accum + chunk });
+                            accum += chunk;
+                        }
+
+                        parsed.push({ time: timeInSeconds, text: text, words: words, wordTimings: wordTimings, duration: 3.0 });
+                    }
+                }
+            }
+
+            for(let i=0; i<parsed.length - 1; i++) {
+                parsed[i].duration = parsed[i+1].time - parsed[i].time;
+                if(parsed[i].duration <= 0 || parsed[i].duration > 10) parsed[i].duration = 3.0;
+            }
+
+            return parsed;
+        }
+
+        function renderLyrics(parsedLines) {
+            let html = '<div style="height: 50%;"></div>';
+            parsedLines.forEach((line, index) => {
+                let wordsHtml = line.wordTimings.map(wt => `<span class="lyric-word">${wt.word}</span>`).join(' ');
+                html += `<div class="lyric-line" id="lyric-${index}" onclick="seekTo(${line.time})">${wordsHtml}</div>`;
+            });
+            html += '<div style="height: 50%;"></div>';
+            lyricsContainer.innerHTML = html;
+        }
+
+        function renderPlainLyrics(text) {
+            let html = '<div style="height: 20px;"></div>';
+            text.split('\\n').forEach(line => {
+                if(line.trim()) html += `<div class="lyric-line" style="cursor:default;">${line.replace(/</g, '&lt;')}</div>`;
+                else html += `<br>`;
+            });
+            html += '<div style="height: 50px;"></div>';
+            lyricsContainer.innerHTML = html;
+        }
+
+        function seekTo(timeSeconds) {
+            if(!audio.duration) return;
+            audio.currentTime = timeSeconds;
+        }
+
+        function nextTrack() {
+            if (isRadioMode) {
+                if (currentSongObj) radioHistory.push(currentSongObj.filename);
+                if (radioHistory.length > 30) radioHistory.shift();
+
+                let histParam = radioHistory.map(encodeURIComponent).join(',');
+                let artistParam = currentSongObj ? encodeURIComponent(currentSongObj.artist) : '';
+
+                fetch('/api/radio/next?history=' + histParam + '&current_artist=' + artistParam)
+                    .then(res => res.json())
+                    .then(data => {
+                        if(data.song) {
+                            loadTrack(data.song);
+                            updateRadioUI();
+                        }
+                    });
+            } else {
+                if (currentQueue.length === 0) return;
+                currentIndex++;
+                if (currentIndex >= currentQueue.length) {
+                    currentIndex = 0;
+                    if (!isRepeat) {
+                        audio.pause();
+                        renderQueue();
+                        return;
+                    }
+                }
+                let nextSong = currentQueue[currentIndex];
+                if (nextSong.type === 'external') {
+                    playExternal(nextSong);
+                } else {
+                    loadTrack(nextSong);
+                }
+            }
+        }
+
+        function prevTrack() {
+            if (audio.currentTime > 3) {
+                audio.currentTime = 0;
+            } else if (!isRadioMode && currentQueue.length > 0) {
+                currentIndex--;
+                if (currentIndex < 0) currentIndex = currentQueue.length - 1;
+                let prevSong = currentQueue[currentIndex];
+                if (prevSong.type === 'external') {
+                    playExternal(prevSong);
+                } else {
+                    loadTrack(prevSong);
+                }
+            }
+        }
+
         // ---------------------------------------------------------
-        // MONOCHROME VIEW (UPDATED)
+        // MONOCHROME VIEW
         // ---------------------------------------------------------
         let monoData = null;
 
@@ -2477,10 +2710,6 @@ HTML_TEMPLATE = r"""
             }
         }
 
-        function fetchMonochrome() {
-            fetchMonochromeViaBrowser();
-        }
-
         function copyMonoCommand() {
             const cmdEl = document.getElementById('mono-command');
             navigator.clipboard.writeText(cmdEl.innerText).then(() => {
@@ -2530,7 +2759,7 @@ HTML_TEMPLATE = r"""
         }
 
         // ---------------------------------------------------------
-        // SETTINGS & ADMIN (unchanged + wishlist admin)
+        // SETTINGS & ADMIN
         // ---------------------------------------------------------
         function renderSettings() {
             let html = `
@@ -2608,10 +2837,9 @@ HTML_TEMPLATE = r"""
                     <div id="users-table-container">Loading users...</div>
                 </div>
 
-                <!-- Admin Wishlist View -->
                 <h2 style="margin-top:50px; font-size:32px;"><i class="fas fa-star" style="color:var(--accent); font-size:24px; margin-right:12px;"></i>User Wishlists</h2>
                 <div class="admin-card" style="max-width:100%; overflow-x: auto;">
-                    <h3 style="margin-top:0; font-size:18px; font-weight:800;">All Users' Wishlists (Download Requests)</h3>
+                    <h3 style="margin-top:0; font-size:18px; font-weight:800;">All Users' Wishlists (Request List)</h3>
                     <div id="admin-wishlists-container">Loading wishlists...</div>
                 </div>
                 `;
@@ -2629,14 +2857,21 @@ HTML_TEMPLATE = r"""
             fetch('/api/admin/wishlists')
                 .then(res => res.json())
                 .then(data => {
-                    let html = `<table class="admin-table"><tr><th>User</th><th>Songs in Wishlist</th></tr>`;
+                    let html = `<table class="admin-table"><tr><th>User</th><th>Wishlist Items</th></tr>`;
                     if (Object.keys(data).length === 0) {
                         html += `<tr><td colspan="2" style="text-align:center; color:rgba(255,255,255,0.3); padding:30px;">No wishlists yet.</td></tr>`;
                     } else {
                         for (let [user, wishlist] of Object.entries(data)) {
+                            let itemsHtml = wishlist.map(w => {
+                                if (w.type === 'local') {
+                                    return `<span class="badge-user">${w.filename}</span>`;
+                                } else if (w.type === 'external') {
+                                    return `<span class="badge-admin" style="background:rgba(255,204,0,0.2); color:#ffcc00;">${w.title} - ${w.artist} <i class="fas fa-external-link-alt" style="font-size:10px;"></i></span>`;
+                                }
+                            }).join(' ');
                             html += `<tr>
                                 <td><strong>${user}</strong></td>
-                                <td>${wishlist.length > 0 ? wishlist.join(', ') : 'Empty'}</td>
+                                <td>${itemsHtml}</td>
                             </tr>`;
                         }
                     }
@@ -3328,17 +3563,36 @@ def api_wishlist():
 
     elif request.method == 'POST':
         data = request.json
-        filename = data.get('filename')
         action = data.get('action')  # 'add' or 'remove'
-        if not filename:
-            return jsonify({"error": "Missing filename"}), 400
+        item = data.get('item')      # object: {type, ...}
+        if not item:
+            return jsonify({"error": "Missing item"}), 400
+
+        if item.get('type') == 'local':
+            if not item.get('filename'):
+                return jsonify({"error": "Missing filename"}), 400
+        elif item.get('type') == 'external':
+            if not item.get('youtube_id'):
+                return jsonify({"error": "Missing youtube_id"}), 400
+        else:
+            return jsonify({"error": "Invalid item type"}), 400
 
         if action == 'add':
-            if filename not in user_data['wishlist']:
-                user_data['wishlist'].append(filename)
+            exists = any(
+                (item['type'] == 'local' and w.get('type') == 'local' and w.get('filename') == item['filename']) or
+                (item['type'] == 'external' and w.get('type') == 'external' and w.get('youtube_id') == item['youtube_id'])
+                for w in user_data['wishlist']
+            )
+            if not exists:
+                user_data['wishlist'].append(item)
         elif action == 'remove':
-            if filename in user_data['wishlist']:
-                user_data['wishlist'].remove(filename)
+            user_data['wishlist'] = [
+                w for w in user_data['wishlist']
+                if not (
+                    (item['type'] == 'local' and w.get('type') == 'local' and w.get('filename') == item['filename']) or
+                    (item['type'] == 'external' and w.get('type') == 'external' and w.get('youtube_id') == item['youtube_id'])
+                )
+            ]
         else:
             return jsonify({"error": "Invalid action"}), 400
 
@@ -3358,7 +3612,20 @@ def admin_wishlists():
             all_wishlists[username] = wishlist
     return jsonify(all_wishlists)
 
-# --- MONOCHROME API ROUTES ---
+# ---- SEARCH YOUTUBE API ----
+@app.route('/api/search/youtube')
+def api_search_youtube():
+    if 'user' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify({"error": "Missing query"}), 400
+
+    results = search_youtube(query, max_results=20)
+    return jsonify({"results": results})
+
+# ---- MONOCHROME API ROUTES ----
 @app.route('/api/monochrome/fetch', methods=['POST'])
 def api_monochrome_fetch():
     if 'user' not in session:
