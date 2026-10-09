@@ -3,6 +3,7 @@ import sys
 import io
 import json
 import base64
+import math
 import random
 import re
 import uuid
@@ -284,56 +285,87 @@ def get_radio_recommendation(username, history_list=None, current_artist=None):
     dislikes = set(user.get("dislikes", []))
     play_counts = user.get("play_counts", {})
     all_files = get_all_filepaths()
+    if not all_files:
+        return None
+
+    metadata_by_file = {filename: get_song_metadata(filename) for filename in all_files}
+    valid_songs = [filename for filename in all_files if filename not in dislikes]
+    if not valid_songs:
+        return None
 
     history_list = history_list or []
-    history_set = set(history_list)
+    artist_affinity = {}
+    genre_affinity = {}
 
-    valid_songs = [s for s in all_files if s not in dislikes and s not in history_set]
-    if not valid_songs: valid_songs = [s for s in all_files if s not in dislikes]
-    if not valid_songs: return get_song_metadata(random.choice(all_files)) if all_files else None
+    for liked_song in likes:
+        metadata = metadata_by_file.get(liked_song)
+        if not metadata:
+            continue
+        artist = metadata.get('artist', '').strip().lower()
+        genre = metadata.get('genre', '').strip().lower()
+        if artist:
+            artist_affinity[artist] = artist_affinity.get(artist, 0) + 3
+        if genre and genre != 'unknown genre':
+            genre_affinity[genre] = genre_affinity.get(genre, 0) + 3
 
-    recent_genres = set()
-    recent_artists = set()
+    for played_song, raw_count in play_counts.items():
+        metadata = metadata_by_file.get(played_song)
+        if not metadata:
+            continue
+        try:
+            count = max(0, int(raw_count))
+        except (TypeError, ValueError):
+            continue
+        signal = min(math.log1p(count), 2.5)
+        artist = metadata.get('artist', '').strip().lower()
+        genre = metadata.get('genre', '').strip().lower()
+        if artist:
+            artist_affinity[artist] = artist_affinity.get(artist, 0) + signal
+        if genre and genre != 'unknown genre':
+            genre_affinity[genre] = genre_affinity.get(genre, 0) + signal
+
+    recent_artists = []
+    recent_genres = []
     if current_artist:
-        recent_artists.add(current_artist.lower())
+        recent_artists.append(current_artist.strip().lower())
 
-    for song_filename in history_list[-3:]:
-        m = meta_cache.get(song_filename)
-        if m:
-            if m.get('artist'): recent_artists.add(m['artist'].lower())
-            if m.get('genre') and m['genre'] != 'Unknown Genre': recent_genres.add(m['genre'].lower())
-
-    user_top_artists = set()
-    user_top_genres = set()
-    for song_filename in likes:
-        m = meta_cache.get(song_filename)
-        if m:
-            if m.get('artist'): user_top_artists.add(m['artist'].lower())
-            if m.get('genre') and m['genre'] != 'Unknown Genre': user_top_genres.add(m['genre'].lower())
+    for song_filename in history_list[-8:]:
+        metadata = metadata_by_file.get(song_filename)
+        if not metadata:
+            continue
+        artist = metadata.get('artist', '').strip().lower()
+        genre = metadata.get('genre', '').strip().lower()
+        if artist:
+            recent_artists.append(artist)
+        if genre and genre != 'unknown genre':
+            recent_genres.append(genre)
 
     weights = []
     for song in valid_songs:
-        meta = get_song_metadata(song)
-        weight = 15.0
+        metadata = metadata_by_file[song]
+        artist = metadata.get('artist', '').strip().lower()
+        genre = metadata.get('genre', '').strip().lower()
+        try:
+            plays = max(0, int(play_counts.get(song, 0)))
+        except (TypeError, ValueError):
+            plays = 0
 
-        song_artist_lower = meta['artist'].lower()
-        song_genre_lower = meta.get('genre', 'Unknown Genre').lower()
+        weight = 1.0
+        if song in likes:
+            weight += 4.0
+        weight += min(artist_affinity.get(artist, 0), 8) * 0.7
+        if genre and genre != 'unknown genre':
+            weight += min(genre_affinity.get(genre, 0), 8) * 0.55
+        weight /= 1 + math.log1p(plays) * 0.45
 
-        if song in likes: weight += 35.0
-        if song_artist_lower in recent_artists: weight += 25.0
-        if song_genre_lower != 'unknown genre' and song_genre_lower in recent_genres: weight += 30.0
-        if song_artist_lower in user_top_artists: weight += 15.0
-        if song_genre_lower != 'unknown genre' and song_genre_lower in user_top_genres: weight += 20.0
+        if artist in recent_artists[-2:]:
+            weight *= 0.3
+        elif artist in recent_artists:
+            weight *= 0.65
+        if genre and genre != 'unknown genre' and genre in recent_genres[-3:]:
+            weight *= 0.8
 
-        plays = play_counts.get(song, 0)
-        if plays == 0:
-            weight += 15.0
-        else:
-            penalty = plays * 2.0
-            if song in likes: penalty *= 0.5
-            weight = max(5.0, weight - penalty)
-
-        weight *= random.uniform(0.85, 1.25)
+        weight *= random.uniform(0.9, 1.1)
         weights.append(weight)
 
     recommended_filename = random.choices(valid_songs, weights=weights, k=1)[0]
@@ -875,15 +907,19 @@ HTML_TEMPLATE = r"""
 
         @media (max-width: 768px) {
             body { flex-direction: column; overflow: auto; }
-            .sidebar { position: fixed; bottom: 88px; left: 0; right: 0; width: 100%; height: auto; flex-direction: row; justify-content: space-around; align-items: center; padding: 6px 8px; background: rgba(10, 10, 10, 0.95); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px); border-top: 1px solid rgba(255,255,255,0.08); border-right: none; z-index: 999; gap: 0; }
+            .sidebar { position: fixed; bottom: 88px; left: 0; right: 0; width: 100%; height: auto; flex-direction: row; justify-content: flex-start; align-items: center; padding: 6px 8px; background: rgba(10, 10, 10, 0.95); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px); border-top: 1px solid rgba(255,255,255,0.08); border-right: none; z-index: 999; gap: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+            .sidebar::-webkit-scrollbar { display: none; }
             .sidebar .logo, .sidebar .nav-section-title { display: none; }
-            .sidebar .nav-item { flex-direction: column; gap: 3px; font-size: 10px; padding: 6px 8px; border-radius: 8px; }
+            .sidebar .nav-item { flex: 0 0 62px; flex-direction: column; gap: 3px; font-size: 10px; padding: 6px 4px; border-radius: 8px; }
             .sidebar .nav-item i { font-size: 16px; width: auto; }
             .sidebar .nav-item:hover, .sidebar .nav-item.active { transform: none; }
             .center-wrapper { margin-bottom: 160px; margin-right: 0; border-radius: 0; }
             .top-bar { padding: 0 16px; height: 64px; border-radius: 0; }
-            .search-container { width: 170px; padding: 8px 14px; }
+            .search-container { width: auto; min-width: 0; flex: 1; padding: 8px 12px; }
             .search-container input { font-size: 13px; }
+            .top-bar { gap: 10px; }
+            .user-badge { max-width: 132px; gap: 6px; padding: 7px 9px; }
+            .user-badge span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .main-content { padding: 84px 16px 140px 16px; }
             h2 { font-size: 22px; margin-bottom: 16px; }
             .grid { grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); gap: 14px; margin-bottom: 32px; }
@@ -1931,7 +1967,7 @@ HTML_TEMPLATE = r"""
                 'box-shadow:0 10px 30px rgba(0,0,0,0.5);' +
                 'border:1px solid rgba(255,255,255,0.1);' +
                 'backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);' +
-                'opacity:0; transition:opacity 0.3s ease;';
+                'opacity:0; transition:opacity 0.3s ease; max-width: 80vw;';
             toast.textContent = message;
             container.appendChild(toast);
             requestAnimationFrame(() => { toast.style.opacity = '1'; });
@@ -1966,24 +2002,40 @@ HTML_TEMPLATE = r"""
             }
         }
 
-        function handleYtProxyFailure(reason) {
+        async function handleYtProxyFailure(reason) {
             clearYtProxyTimeout();
             if (ytMode !== 'proxy' || !currentExternalTrack) return;
 
+            const failedVideoId = currentExternalTrack.youtube_id;
             ytProxyConsecutiveFails++;
             console.warn(
                 `YouTube EQ playback failed (${reason}); falling back to standard playback. ` +
                 `Consecutive fails: ${ytProxyConsecutiveFails}`
             );
 
+            // Ask the server what went wrong with the specific stream we just tried.
+            let detail = '';
+            try {
+                const r = await fetch(`/api/youtube/audio/last-error?v=${encodeURIComponent(failedVideoId)}`);
+                if (r.ok) {
+                    const d = await r.json();
+                    if (d && d.message) detail = d.message;
+                }
+            } catch (e) { /* no server detail available */ }
+
             if (ytProxyConsecutiveFails >= 3) {
-                // Give up on proxy for this session so we don't thrash.
                 useYtAudioProxy = false;
                 const btn = document.getElementById('yt-eq-toggle');
                 if (btn) btn.classList.remove('active');
-                showToast('YouTube EQ unavailable — standard playback active for this session');
+                const msg = detail
+                    ? `YouTube EQ disabled for this session — ${detail}`
+                    : 'YouTube EQ unavailable — standard playback active for this session';
+                showToast(msg, 6000);
             } else {
-                showToast('YouTube EQ unavailable for this track — using standard playback');
+                const msg = detail
+                    ? `YouTube EQ failed: ${detail} — using standard playback`
+                    : 'YouTube EQ failed — using standard playback for this track';
+                showToast(msg, 5000);
             }
 
             const fallback = { ...currentExternalTrack, type: 'external' };
@@ -2623,19 +2675,41 @@ HTML_TEMPLATE = r"""
             contentDiv.innerHTML = `<div class="fade-in"><h2 style="margin-bottom:24px;">${title}</h2>` + buildCardsHTML(songsArray) + `</div>`;
         }
 
+        function getDiscoveryScore(song) {
+            const stats = songStats[song.filename] || { likes: 0, dislikes: 0, plays: 0 };
+            const ageDays = Math.max(0, (Date.now() / 1000 - (Number(song.mtime) || Date.now() / 1000)) / 86400);
+            const recency = Math.exp(-ageDays / 90);
+            const engagement = (Number(stats.likes) || 0) * 4
+                + Math.log1p(Number(stats.plays) || 0) * 2
+                - (Number(stats.dislikes) || 0) * 3;
+            return engagement * (0.7 + recency * 0.3) + recency;
+        }
+
         function renderHome() {
-            let popular = [...allSongs].sort((a, b) => {
-                let statA = songStats[a.filename] || {likes:0, plays:0};
-                let statB = songStats[b.filename] || {likes:0, plays:0};
-                return (statB.likes * 5 + statB.plays) - (statA.likes * 5 + statA.plays);
-            }).slice(0, 12);
+            if (allSongs.length === 0) {
+                contentDiv.innerHTML = `
+                    <div class="fade-in" style="max-width:720px; margin:40px auto; text-align:center;">
+                        <h2 style="margin-bottom:12px;">Your library is ready for music</h2>
+                        <p style="color:var(--subtext); margin:0 auto 24px; max-width:480px;">Search available music sources or add tracks to your local library.</p>
+                        <button class="action-btn" style="background:var(--accent); color:#000; padding:12px 20px;" onclick="switchView('discover')"><i class="fas fa-search" style="margin-right:8px;"></i>Discover music</button>
+                    </div>`;
+                return;
+            }
+            let popular = [...allSongs].sort((a, b) =>
+                getDiscoveryScore(b) - getDiscoveryScore(a) || a.title.localeCompare(b.title)
+            ).slice(0, 12);
 
             let newlyAdded = [...allSongs].sort((a, b) => b.mtime - a.mtime).slice(0, 12);
 
             let topArtistsHtml = `<div class="scroll-row">`;
-            let artistNames = Object.keys(groupedArtists).slice(0, 12);
-            artistNames.forEach(artist => {
-                let sampleSong = groupedArtists[artist][0];
+            let featuredArtists = Object.entries(groupedArtists).map(([artist, songs]) => ({
+                artist,
+                songs,
+                score: songs.reduce((total, song) => total + getDiscoveryScore(song), 0) / Math.sqrt(songs.length)
+                    + Math.log1p(songs.length) * 0.25
+            })).sort((a, b) => b.score - a.score || a.artist.localeCompare(b.artist)).slice(0, 12);
+            featuredArtists.forEach(({ artist, songs }) => {
+                let sampleSong = songs[0];
                 let coverUrl = getCoverUrl(sampleSong);
                 let escapedArtist = artist.replace(/'/g, "\\\\'").replace(/"/g, '&quot;');
                 topArtistsHtml += `
@@ -2645,7 +2719,7 @@ HTML_TEMPLATE = r"""
                         <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
                     </div>
                     <div class="card-title" style="font-size: 14px; margin-bottom: 4px;">${artist}</div>
-                    <div style="font-size:12px; color:var(--subtext); font-weight: 500;">${groupedArtists[artist].length} tracks</div>
+                    <div style="font-size:12px; color:var(--subtext); font-weight: 500;">${songs.length} tracks</div>
                 </div>`;
             });
             topArtistsHtml += `</div>`;
@@ -3050,6 +3124,13 @@ HTML_TEMPLATE = r"""
             radioHistory = [];
             currentQueue = [];
 
+            if (allSongs.length === 0) {
+                isRadioMode = false;
+                const status = document.getElementById('radio-current-status');
+                if (status) status.innerHTML = '<i class="fas fa-music" style="color:var(--accent);"></i> Add local tracks to start radio.';
+                return;
+            }
+
             document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
             let navItems = document.querySelectorAll('.nav-item');
             if(navItems.length > 4) navItems[4].classList.add('active');
@@ -3111,14 +3192,14 @@ HTML_TEMPLATE = r"""
                         if(!ytPlayer) {
                             ytPlayer = new YT.Player('rp-video', {
                                 videoId: data.youtube_id,
-                                playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0, 'modestbranding': 1, 'rel': 0, 'showinfo': 0, 'mute': 1 },
+                                playerVars: { 'autoplay': 0, 'controls': 0, 'disablekb': 1, 'fs': 0, 'modestbranding': 1, 'rel': 0, 'showinfo': 0, 'mute': 1 },
                                 events: {
-                                    'onReady': (e) => { e.target.mute(); e.target.playVideo(); }
+                                    'onReady': (e) => { e.target.mute(); e.target.cueVideoById(data.youtube_id); }
                                 }
                             });
                         } else {
                             ytPlayer.mute();
-                            ytPlayer.loadVideoById(data.youtube_id);
+                            ytPlayer.cueVideoById(data.youtube_id);
                         }
                     } else if (ytPlayer) {
                         try { ytPlayer.stopVideo(); } catch (e) {}
@@ -3231,7 +3312,16 @@ HTML_TEMPLATE = r"""
                         if(data.song) {
                             loadTrack(data.song);
                             updateRadioUI();
+                        } else {
+                            isRadioMode = false;
+                            pauseCurrentPlayback();
+                            const status = document.getElementById('radio-current-status');
+                            if (status) status.innerHTML = '<i class="fas fa-music" style="color:var(--accent);"></i> No eligible tracks. Add music or remove a dislike to continue.';
                         }
+                    })
+                    .catch(() => {
+                        const status = document.getElementById('radio-current-status');
+                        if (status) status.innerText = 'Radio could not load a track. Try skipping again.';
                     });
             } else {
                 if (currentQueue.length === 0) return;
@@ -3562,6 +3652,19 @@ HTML_TEMPLATE = r"""
 
             if (currentUserIsAdmin) {
                 html += `
+                <div class="admin-card" style="margin-bottom:30px;">
+                    <h3 style="margin-top:0; font-size:18px; font-weight:800;">
+                        <i class="fas fa-stethoscope" style="margin-right:8px;"></i>YouTube EQ Diagnostics
+                    </h3>
+                    <p style="font-size:13px; color:var(--subtext); margin-top:0;">
+                        Verify the server can pipe YouTube audio through ffmpeg for Web Audio filtering.
+                    </p>
+                    <button class="action-btn" style="background:var(--accent); color:black; padding:12px 20px; font-weight:700;" onclick="runYoutubeDiagnostic()">
+                        <i class="fas fa-play"></i> Run Diagnostic
+                    </button>
+                    <div id="youtube-diag-result" style="margin-top:16px;"></div>
+                </div>
+
                 <div class="admin-card" style="margin-bottom:30px; border: 1px solid rgba(29, 185, 84, 0.4); background: rgba(29, 185, 84, 0.05);">
                     <h3 style="margin-top:0; font-size:20px; font-weight:800; color:var(--accent); letter-spacing:-0.5px;"><i class="fas fa-cloud-upload-alt" style="margin-right:10px;"></i>Upload Music</h3>
                     <p style="font-size:14px; color:var(--text); opacity:0.8; margin-top:0; font-weight:500;">Upload MP3 or FLAC files directly to your server's persistent storage.</p>
@@ -3606,6 +3709,70 @@ HTML_TEMPLATE = r"""
                 loadUsersTable();
                 loadAdminWishlists();
             }
+        }
+
+        async function runYoutubeDiagnostic() {
+            const el = document.getElementById('youtube-diag-result');
+            el.innerHTML = '<div style="color:var(--subtext); font-weight:600;"><i class="fas fa-spinner fa-spin"></i> Testing… (can take up to 25s)</div>';
+
+            let data;
+            try {
+                const res = await fetch('/api/diagnose/youtube');
+                data = await res.json();
+                if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+            } catch (e) {
+                el.innerHTML = `<div style="color:#ff5555; font-weight:700;">Diagnostic failed: ${e.message}</div>`;
+                return;
+            }
+
+            const line = (ok, label, detail) => `
+                <div style="display:flex; gap:12px; padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.05); align-items:flex-start;">
+                    <i class="fas ${ok ? 'fa-check-circle' : 'fa-times-circle'}"
+                       style="color:${ok ? 'var(--accent)' : '#ff5555'}; margin-top:3px; font-size:16px;"></i>
+                    <div style="flex:1;">
+                        <div style="font-weight:700; font-size:14px;">${label}</div>
+                        ${detail ? `<div style="color:var(--subtext); font-size:12px; margin-top:3px; word-break:break-all;">${detail}</div>` : ''}
+                    </div>
+                </div>`;
+
+            let html = '';
+            html += line(
+                data.ytdlp.found,
+                'yt-dlp installed',
+                data.ytdlp.found
+                    ? `${data.ytdlp.version || 'unknown version'} — ${data.ytdlp.path}`
+                    : 'Not found. Install with: <code>python -m pip install yt-dlp</code>'
+            );
+            html += line(
+                data.ffmpeg.found,
+                'ffmpeg installed',
+                data.ffmpeg.found
+                    ? (data.ffmpeg.version || data.ffmpeg.path)
+                    : 'Not found. Install ffmpeg system-wide, or place the binary next to app.py'
+            );
+            html += line(
+                data.libmp3lame.available,
+                'ffmpeg has libmp3lame encoder',
+                data.libmp3lame.available
+                    ? 'MP3 encoding available'
+                    : (data.libmp3lame.error || 'Missing libmp3lame')
+            );
+            html += line(
+                data.youtube_probe.success,
+                'Live YouTube stream resolution',
+                data.youtube_probe.success
+                    ? `OK in ${data.youtube_probe.elapsed_ms}ms (CDN: ${data.youtube_probe.stream_url_host || 'unknown'})`
+                    : `Failed: ${data.youtube_probe.error || 'unknown'}`
+            );
+            html += line(
+                data.ready,
+                data.ready ? '✅ READY — YouTube EQ will be applied' : '❌ NOT READY — YouTube will fall back to non-EQ playback',
+                data.ready
+                    ? 'Press the EQ slider in the bottom bar while a YouTube track plays to confirm.'
+                    : 'Fix the failing item(s) above, then restart the server.'
+            );
+
+            el.innerHTML = `<div style="background:rgba(0,0,0,0.3); border-radius:12px; padding:16px; border:1px solid rgba(255,255,255,0.05);">${html}</div>`;
         }
 
         function loadAdminWishlists() {
@@ -4414,6 +4581,34 @@ def api_search_spotify():
     return jsonify({"results": results, "available": True})
 
 # ---- YOUTUBE AUDIO PROXY (enables EQ on YouTube) ----
+_youtube_proxy_errors = {}
+_youtube_proxy_errors_lock = threading.Lock()
+
+def _record_youtube_proxy_error(video_id, message):
+    with _youtube_proxy_errors_lock:
+        _youtube_proxy_errors[video_id] = (message, time.time())
+        if len(_youtube_proxy_errors) > 50:
+            cutoff = time.time() - 600
+            for k in list(_youtube_proxy_errors.keys()):
+                if _youtube_proxy_errors[k][1] < cutoff:
+                    del _youtube_proxy_errors[k]
+
+def _last_youtube_proxy_error(video_id):
+    with _youtube_proxy_errors_lock:
+        entry = _youtube_proxy_errors.get(video_id)
+    if not entry:
+        return None
+    msg, ts = entry
+    return {"message": msg, "age_seconds": int(time.time() - ts)}
+
+@app.route('/api/youtube/audio/last-error')
+def api_youtube_last_error():
+    if 'user' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    video_id = request.args.get('v', '').strip()
+    info = _last_youtube_proxy_error(video_id) if video_id else None
+    return jsonify(info or {"message": None})
+
 @app.route('/api/youtube/audio')
 def api_youtube_audio():
     """Stream YouTube audio through ffmpeg so Web Audio filters can be applied."""
@@ -4422,14 +4617,17 @@ def api_youtube_audio():
 
     video_id = request.args.get('v', '').strip()
     if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+        _record_youtube_proxy_error(video_id, "Invalid video ID")
         return "Invalid video id", 400
 
     ytdlp = find_ytdlp()
     if not ytdlp:
+        _record_youtube_proxy_error(video_id, "yt-dlp not installed on server")
         return "yt-dlp is not available on this server", 503
 
     ffmpeg_path = resolve_ffmpeg_path()
     if not ffmpeg_path:
+        _record_youtube_proxy_error(video_id, "ffmpeg not installed on server")
         return "FFmpeg not found", 503
 
     watch_url = f'https://www.youtube.com/watch?v={video_id}'
@@ -4441,22 +4639,36 @@ def api_youtube_audio():
         probe = subprocess.run(
             [ytdlp, '-g', '-f', 'bestaudio/best', '--no-playlist',
              '--no-warnings', watch_url],
-            capture_output=True, text=True, timeout=20
+            capture_output=True, text=True, timeout=25
         )
     except subprocess.TimeoutExpired:
+        _record_youtube_proxy_error(video_id, "yt-dlp probe timed out (25s) — YouTube may be blocking this server IP")
         return "yt-dlp probe timed out", 504
     except Exception as e:
+        _record_youtube_proxy_error(video_id, f"yt-dlp probe crashed: {e}")
         return f"yt-dlp probe failed: {e}", 502
 
     if probe.returncode != 0:
         err = ''
         if probe.stderr:
             err = probe.stderr.strip().split('\n')[-1]
+        if not err:
+            err = f"yt-dlp exited with code {probe.returncode}"
+        # Classify common yt-dlp failures so the toast is actually useful
+        low = err.lower()
+        if 'sign in' in low or 'bot' in low or 'confirm' in low:
+            err = "YouTube bot check triggered (server IP blocked)"
+        elif 'unavailable' in low or 'private' in low:
+            err = "Video unavailable or region-locked"
+        elif 'not found' in low:
+            err = "Video not found"
+        _record_youtube_proxy_error(video_id, err)
         print(f"yt-dlp probe failed for {video_id}: {err}")
-        return f"Video unavailable: {err or 'unknown error'}", 502
+        return f"Video unavailable: {err}", 502
 
     stream_url = (probe.stdout or '').strip().split('\n')[0]
     if not stream_url:
+        _record_youtube_proxy_error(video_id, "yt-dlp returned no stream URL")
         return "No stream URL returned by yt-dlp", 502
 
     # Now spawn ffmpeg reading directly from the resolved googlevideo URL.
@@ -4473,6 +4685,7 @@ def api_youtube_audio():
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
         )
     except Exception as e:
+        _record_youtube_proxy_error(video_id, f"ffmpeg spawn failed: {e}")
         print(f"ffmpeg spawn failed: {e}")
         return f"ffmpeg spawn failed: {e}", 500
 
@@ -4491,6 +4704,83 @@ def api_youtube_audio():
     resp.headers['Cache-Control'] = 'no-store'
     resp.call_on_close(_cleanup)
     return resp
+
+
+@app.route('/api/diagnose/youtube')
+def api_diagnose_youtube():
+    """Diagnostic: report on YouTube EQ proxy readiness (admin only)."""
+    if not session.get('is_admin'):
+        return jsonify({"error": "Unauthorized"}), 403
+
+    result = {
+        "ytdlp": {"found": False, "path": None, "version": None, "error": None},
+        "ffmpeg": {"found": False, "path": None, "version": None, "error": None},
+        "libmp3lame": {"available": False, "error": None},
+        "youtube_probe": {"success": False, "error": None, "stream_url_host": None, "elapsed_ms": None},
+        "ready": False
+    }
+
+    # 1) yt-dlp check
+    ytdlp = find_ytdlp()
+    if ytdlp:
+        result["ytdlp"]["found"] = True
+        result["ytdlp"]["path"] = ytdlp
+        try:
+            v = subprocess.run([ytdlp, '--version'], capture_output=True, text=True, timeout=5)
+            result["ytdlp"]["version"] = (v.stdout or '').strip()
+        except Exception as e:
+            result["ytdlp"]["error"] = str(e)
+
+    # 2) ffmpeg check
+    ffmpeg_path = resolve_ffmpeg_path()
+    if ffmpeg_path:
+        result["ffmpeg"]["found"] = True
+        result["ffmpeg"]["path"] = ffmpeg_path
+        try:
+            v = subprocess.run([ffmpeg_path, '-version'], capture_output=True, text=True, timeout=5)
+            result["ffmpeg"]["version"] = (v.stdout or '').split('\n')[0]
+            enc = subprocess.run([ffmpeg_path, '-hide_banner', '-encoders'],
+                                 capture_output=True, text=True, timeout=5)
+            result["libmp3lame"]["available"] = 'libmp3lame' in (enc.stdout or '')
+            if not result["libmp3lame"]["available"]:
+                result["libmp3lame"]["error"] = 'libmp3lame encoder not compiled into this ffmpeg build'
+        except Exception as e:
+            result["ffmpeg"]["error"] = str(e)
+
+    # 3) Live probe against a stable YouTube video (Rick Astley — never going away)
+    if ytdlp:
+        test_video_id = 'dQw4w9WgXcQ'
+        start = time.time()
+        try:
+            probe = subprocess.run(
+                [ytdlp, '-g', '-f', 'bestaudio/best', '--no-playlist',
+                 '--no-warnings', f'https://www.youtube.com/watch?v={test_video_id}'],
+                capture_output=True, text=True, timeout=25
+            )
+            result["youtube_probe"]["elapsed_ms"] = int((time.time() - start) * 1000)
+            if probe.returncode == 0 and (probe.stdout or '').strip():
+                stream_url = probe.stdout.strip().split('\n')[0]
+                result["youtube_probe"]["success"] = True
+                try:
+                    result["youtube_probe"]["stream_url_host"] = urllib.parse.urlparse(stream_url).hostname
+                except Exception:
+                    pass
+            else:
+                err = (probe.stderr or '').strip().split('\n')[-1] if probe.stderr else 'unknown error'
+                result["youtube_probe"]["error"] = err
+        except subprocess.TimeoutExpired:
+            result["youtube_probe"]["error"] = "yt-dlp probe timed out after 25s"
+            result["youtube_probe"]["elapsed_ms"] = 25000
+        except Exception as e:
+            result["youtube_probe"]["error"] = str(e)
+
+    result["ready"] = (
+        result["ytdlp"]["found"]
+        and result["ffmpeg"]["found"]
+        and result["libmp3lame"]["available"]
+        and result["youtube_probe"]["success"]
+    )
+    return jsonify(result)
 
 # ---- MONOCHROME API ROUTES ----
 @app.route('/api/monochrome/fetch', methods=['POST'])
