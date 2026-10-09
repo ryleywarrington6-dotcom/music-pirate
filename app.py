@@ -2,6 +2,7 @@ import os
 import sys
 import io
 import json
+import base64
 import random
 import re
 import uuid
@@ -126,6 +127,8 @@ def save_db(db):
 
 meta_cache = load_json_file(METADATA_FILE, {})
 video_cache = load_json_file(VIDEO_CACHE_FILE, {})
+spotify_token = None
+spotify_token_expires_at = 0
 _meta_cache_dirty = False
 
 def _save_meta_cache():
@@ -396,8 +399,53 @@ def search_youtube_video(artist, song):
     return None
 
 # New function for YouTube search (multiple results)
+def iter_youtube_video_renderers(document):
+    marker = '"videoRenderer":'
+    search_from = 0
+    while True:
+        marker_start = document.find(marker, search_from)
+        if marker_start < 0:
+            return
+        object_start = document.find('{', marker_start + len(marker))
+        if object_start < 0:
+            return
+
+        depth = 0
+        inside_string = False
+        escaped = False
+        for position in range(object_start, len(document)):
+            character = document[position]
+            if inside_string:
+                if escaped:
+                    escaped = False
+                elif character == '\\':
+                    escaped = True
+                elif character == '"':
+                    inside_string = False
+                continue
+            if character == '"':
+                inside_string = True
+            elif character == '{':
+                depth += 1
+            elif character == '}':
+                depth -= 1
+                if depth == 0:
+                    try:
+                        renderer = json.loads(document[object_start:position + 1])
+                    except json.JSONDecodeError:
+                        search_from = position + 1
+                    else:
+                        yield renderer
+                        search_from = position + 1
+                    break
+        else:
+            return
+
+
 def search_youtube(query, max_results=20):
     """Return a list of video info dicts from YouTube search."""
+    if max_results <= 0:
+        return []
     url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
     results = []
     try:
@@ -406,35 +454,91 @@ def search_youtube(query, max_results=20):
             'Accept-Language': 'en-US,en;q=0.9',
         })
         with urllib.request.urlopen(req, timeout=8.0) as resp:
-            html = resp.read().decode('utf-8')
-            video_ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
-            titles = re.findall(r'"title":\{"runs":\[\{"text":"([^"]+?)"\]\}', html)
-            thumbnails = re.findall(r'"thumbnail":\{\"thumbnails\":\[\{\"url":"([^"]+?)"', html)
-            channel_names = re.findall(r'"ownerText":\{"runs":\[\{"text":"([^"]+?)"\]\}', html)
+            html = resp.read().decode('utf-8', 'replace')
 
-            for i in range(min(len(video_ids), len(titles), len(thumbnails), max_results)):
-                vid = video_ids[i]
-                title = titles[i]
-                thumb = thumbnails[i]
-                artist = "Unknown Artist"
-                if i < len(channel_names):
-                    artist = channel_names[i]
-                if artist == "Unknown Artist":
-                    parts = re.split(r'\s*[-–—:]\s*', title, maxsplit=1)
-                    if len(parts) >= 2:
-                        artist = parts[0].strip()
-                        title = parts[1].strip()
-                results.append({
-                    "youtube_id": vid,
-                    "title": title,
-                    "artist": artist,
-                    "thumbnail": thumb
-                })
-                if len(results) >= max_results:
-                    break
+        seen_video_ids = set()
+        for renderer in iter_youtube_video_renderers(html):
+            video_id = renderer.get('videoId')
+            title_runs = renderer.get('title', {}).get('runs', [])
+            title = title_runs[0].get('text', '').strip() if title_runs else ''
+            if not video_id or not title or video_id in seen_video_ids:
+                continue
+
+            channel_data = renderer.get('ownerText') or renderer.get('longBylineText') or {}
+            channel_runs = channel_data.get('runs', [])
+            artist = channel_runs[0].get('text', '').strip() if channel_runs else 'Unknown Artist'
+            if artist == 'Unknown Artist':
+                parts = re.split(r'\s*[-–—:]\s*', title, maxsplit=1)
+                if len(parts) >= 2:
+                    artist, title = parts[0].strip(), parts[1].strip()
+
+            thumbnails = renderer.get('thumbnail', {}).get('thumbnails', [])
+            thumbnail = next((item.get('url', '') for item in thumbnails if item.get('url')), '')
+            if thumbnail.startswith('//'):
+                thumbnail = 'https:' + thumbnail
+            results.append({
+                'youtube_id': video_id,
+                'title': title,
+                'artist': artist,
+                'thumbnail': thumbnail
+            })
+            seen_video_ids.add(video_id)
+            if len(results) >= max_results:
+                break
     except Exception as e:
         print(f"YouTube search error: {e}")
     return results
+
+def search_spotify(query, max_results=10):
+    client_id = os.environ.get('SPOTIFY_CLIENT_ID')
+    client_secret = os.environ.get('SPOTIFY_CLIENT_SECRET')
+    if not client_id or not client_secret:
+        return None
+
+    global spotify_token, spotify_token_expires_at
+    if not spotify_token or time.time() >= spotify_token_expires_at:
+        credentials = base64.b64encode(f'{client_id}:{client_secret}'.encode('utf-8')).decode('ascii')
+        token_request = urllib.request.Request(
+            'https://accounts.spotify.com/api/token',
+            data=urllib.parse.urlencode({'grant_type': 'client_credentials'}).encode('utf-8'),
+            headers={
+                'Authorization': f'Basic {credentials}',
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            method='POST'
+        )
+        try:
+            with urllib.request.urlopen(token_request, timeout=8) as response:
+                token_data = json.loads(response.read().decode('utf-8'))
+            spotify_token = token_data['access_token']
+            spotify_token_expires_at = time.time() + int(token_data.get('expires_in', 3600)) - 60
+        except Exception as e:
+            print(f'Spotify token error: {e}')
+            return []
+
+    search_url = 'https://api.spotify.com/v1/search?' + urllib.parse.urlencode({
+        'q': query,
+        'type': 'track',
+        'limit': max_results
+    })
+    search_request = urllib.request.Request(search_url, headers={
+        'Authorization': f'Bearer {spotify_token}',
+        'Accept': 'application/json'
+    })
+    try:
+        with urllib.request.urlopen(search_request, timeout=8) as response:
+            tracks = json.loads(response.read().decode('utf-8')).get('tracks', {}).get('items', [])
+        return [{
+            'spotify_id': track['id'],
+            'title': track.get('name') or 'Unknown Track',
+            'artist': ', '.join(artist.get('name', '') for artist in track.get('artists', [])) or 'Unknown Artist',
+            'thumbnail': (track.get('album', {}).get('images') or [{}])[0].get('url', ''),
+            'spotify_url': track.get('external_urls', {}).get('spotify', ''),
+            'duration_ms': track.get('duration_ms', 0)
+        } for track in tracks if track.get('id')]
+    except Exception as e:
+        print(f'Spotify search error: {e}')
+        return []
 
 # ---------------------------------------------------------
 # MONOCHROME INTEGRATION HELPERS
@@ -688,6 +792,8 @@ HTML_TEMPLATE = r"""
         .pop-anim { animation: pop 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
         .btn { background: none; border: none; color: var(--subtext); font-size: 18px; cursor: pointer; transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1); outline: none; }
         .btn:hover { color: var(--text); transform: scale(1.1); }
+        .btn:disabled, input[type=range]:disabled { opacity: 0.35; cursor: not-allowed; }
+        .btn:disabled:hover { color: var(--subtext); transform: none; }
         .btn.active { color: var(--accent) !important; text-shadow: 0 0 10px rgba(29, 185, 84, 0.5); }
         .btn.active#dislike-btn i { color: #ff5555 !important; text-shadow: 0 0 10px rgba(255, 85, 85, 0.5); }
         .btn.play-btn { background: var(--text); color: black; height: 38px; width: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
@@ -819,6 +925,7 @@ HTML_TEMPLATE = r"""
         </div>
         <div id="mp-video-wrapper">
             <div id="rp-video"></div>
+            <div id="spotify-host" style="position:absolute; inset:0; display:none;"></div>
         </div>
         <div class="mp-controls-bar">
             <button class="btn" onclick="prevTrack()"><i class="fas fa-step-backward"></i></button>
@@ -953,6 +1060,7 @@ HTML_TEMPLATE = r"""
     </div>
 
     <script src="https://www.youtube.com/iframe_api"></script>
+    <script src="https://open.spotify.com/embed/iframe-api/v1" async></script>
 
     <script>
         const currentUserIsAdmin = {{ 'true' if is_admin else 'false' }};
@@ -973,13 +1081,39 @@ HTML_TEMPLATE = r"""
         let activeLyricIndex = -1;
         let selectedSongForPlaylist = null;
         let sleepTimerId = null;
+        let searchTimeoutId = null;
+        let searchSequence = 0;
 
         let currentChatFriend = null;
         let messagePollInterval = null;
 
         let ytPlayer = null;
         let ytPlayerReady = false;
-        function onYouTubeIframeAPIReady() { ytPlayerReady = true; }
+        let youtubePlaybackPollId = null;
+        let pendingYouTubeTrack = null;
+        function onYouTubeIframeAPIReady() {
+            ytPlayerReady = true;
+            if (pendingYouTubeTrack) {
+                const track = pendingYouTubeTrack;
+                pendingYouTubeTrack = null;
+                playExternal(track);
+            }
+        }
+
+        let spotifyIframeApi = null;
+        let spotifyController = null;
+        let pendingSpotifyTrack = null;
+        let spotifyDuration = 0;
+        let spotifyPosition = 0;
+        let spotifyIsPaused = true;
+        window.onSpotifyIframeApiReady = (api) => {
+            spotifyIframeApi = api;
+            if (pendingSpotifyTrack) {
+                const track = pendingSpotifyTrack;
+                pendingSpotifyTrack = null;
+                playSpotify(track);
+            }
+        };
 
         let audioCtx;
         let analyser;
@@ -1117,6 +1251,77 @@ HTML_TEMPLATE = r"""
             }
         }
 
+        function ensureRemotePlayerVisible() {
+            if (!pipWindow && !isMiniPlayerOpen) {
+                miniPlayer.style.display = 'flex';
+                mpBtn.classList.add('active');
+                isMiniPlayerOpen = true;
+            }
+        }
+
+        function syncYouTubeVolume() {
+            if (!ytPlayer || !currentExternalTrack || currentExternalTrack.type !== 'external') return;
+            const volume = Number(volumeBar.value);
+            if (volume === 0) {
+                ytPlayer.mute();
+            } else {
+                ytPlayer.unMute();
+                ytPlayer.setVolume(volume);
+            }
+        }
+
+        function syncSpotifyVolume() {
+            const isSpotify = currentExternalTrack && currentExternalTrack.type === 'spotify';
+            const canSetSpotifyVolume = isSpotify && spotifyController && typeof spotifyController.setVolume === 'function';
+            volumeBar.disabled = Boolean(isSpotify && !canSetSpotifyVolume);
+            volumeBar.title = isSpotify && !canSetSpotifyVolume ? 'Adjust volume in the Spotify player' : 'Volume (Up/Down Arrows)';
+            if (canSetSpotifyVolume) spotifyController.setVolume(Number(volumeBar.value) / 100);
+        }
+
+        function setPlaybackUi(isPlaying) {
+            playIcon.classList.toggle('fa-play', !isPlaying);
+            playIcon.classList.toggle('fa-pause', isPlaying);
+            playIcon.style.marginLeft = isPlaying ? '0' : '2px';
+            mpPlayIcon.classList.toggle('fa-play', !isPlaying);
+            mpPlayIcon.classList.toggle('fa-pause', isPlaying);
+            mpPlayIcon.style.marginLeft = isPlaying ? '0' : '2px';
+            eqAnim.classList.toggle('paused', !isPlaying);
+            eqAnim.classList.toggle('playing', isPlaying);
+        }
+
+        function updateYouTubeControls() {
+            if (!currentExternalTrack || currentExternalTrack.type !== 'external' || !ytPlayer || !ytPlayerReady) {
+                if (youtubePlaybackPollId) {
+                    clearInterval(youtubePlaybackPollId);
+                    youtubePlaybackPollId = null;
+                }
+                return;
+            }
+            const duration = ytPlayer.getDuration();
+            const position = ytPlayer.getCurrentTime();
+            if (duration > 0) {
+                progressBar.disabled = false;
+                progressBar.value = (position / duration) * 100;
+                timeCurrentEl.innerText = formatTime(position);
+                timeTotalEl.innerText = formatTime(duration);
+                updateSliderFill(progressBar);
+            }
+            const state = ytPlayer.getPlayerState();
+            setPlaybackUi(state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING);
+        }
+
+        function startYouTubeControlPolling() {
+            if (youtubePlaybackPollId) clearInterval(youtubePlaybackPollId);
+            youtubePlaybackPollId = setInterval(updateYouTubeControls, 500);
+            updateYouTubeControls();
+        }
+
+        function pauseCurrentPlayback() {
+            if (currentExternalTrack && currentExternalTrack.type === 'external' && ytPlayer) ytPlayer.pauseVideo();
+            else if (currentExternalTrack && currentExternalTrack.type === 'spotify' && spotifyController) spotifyController.pause();
+            else audio.pause();
+        }
+
         mpDragHandle.addEventListener('mousedown', (e) => {
             if(e.target.tagName === 'I' || pipWindow) return;
             isDraggingMP = true;
@@ -1182,6 +1387,8 @@ HTML_TEMPLATE = r"""
 
         volumeBar.addEventListener('input', function() {
             audio.volume = this.value / 100;
+            syncYouTubeVolume();
+            syncSpotifyVolume();
             updateSliderFill(this);
             localStorage.setItem('streamer_pro_volume', this.value);
 
@@ -1235,7 +1442,7 @@ HTML_TEMPLATE = r"""
                 let mins = parseInt(prompt("Enter sleep timer in minutes (e.g., 30):"));
                 if (mins && !isNaN(mins) && mins > 0) {
                     sleepTimerId = setTimeout(() => {
-                        audio.pause();
+                        pauseCurrentPlayback();
                         sleepTimerId = null;
                         document.getElementById('sleep-btn').classList.remove('active');
                     }, mins * 60000);
@@ -1348,7 +1555,7 @@ HTML_TEMPLATE = r"""
                 navigator.mediaSession.metadata = new MediaMetadata({
                     title: songObj.title,
                     artist: songObj.artist,
-                    album: songObj.type === 'external' ? 'YouTube' : 'Streamer Pro',
+                    album: songObj.type === 'external' ? 'YouTube' : songObj.type === 'spotify' ? 'Spotify' : 'Streamer Pro',
                     artwork: [ { src: coverUrl, sizes: '500x500', type: 'image/jpeg' } ]
                 });
 
@@ -1384,9 +1591,6 @@ HTML_TEMPLATE = r"""
             eqAnim.classList.remove('paused');
             eqAnim.classList.add('playing');
 
-            if (currentExternalTrack && ytPlayer && typeof ytPlayer.playVideo === 'function') {
-                ytPlayer.playVideo();
-            }
         });
 
         audio.addEventListener('pause', () => {
@@ -1400,9 +1604,6 @@ HTML_TEMPLATE = r"""
 
             eqAnim.classList.add('paused');
 
-            if (currentExternalTrack && ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
-                ytPlayer.pauseVideo();
-            }
         });
 
         audio.addEventListener('loadedmetadata', () => {
@@ -1474,6 +1675,21 @@ HTML_TEMPLATE = r"""
         });
 
         progressBar.addEventListener('input', function() {
+            if (currentExternalTrack && currentExternalTrack.type === 'external') {
+                if (ytPlayer && ytPlayer.getDuration() > 0) {
+                    ytPlayer.seekTo((this.value / 100) * ytPlayer.getDuration(), true);
+                }
+                updateSliderFill(this);
+                return;
+            }
+            if (currentExternalTrack && currentExternalTrack.type === 'spotify') {
+                if (spotifyController && spotifyDuration) {
+                    spotifyPosition = (this.value / 100) * spotifyDuration;
+                    spotifyController.seek(spotifyPosition);
+                }
+                updateSliderFill(this);
+                return;
+            }
             if (!audio.duration) return;
             audio.currentTime = (this.value / 100) * audio.duration;
             updateSliderFill(this);
@@ -1490,12 +1706,31 @@ HTML_TEMPLATE = r"""
                 audio.volume = volumeBar.value / 100;
                 muteIcon.className = "fas fa-volume-up";
             }
+            syncYouTubeVolume();
+            syncSpotifyVolume();
             updateSliderFill(volumeBar);
             localStorage.setItem('streamer_pro_volume', volumeBar.value);
         }
 
         function togglePlay() {
             animateButton('play-btn-wrapper');
+            if (currentExternalTrack && currentExternalTrack.type === 'external') {
+                if (!ytPlayer || !ytPlayerReady) return;
+                const state = ytPlayer.getPlayerState();
+                if (state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING) {
+                    ytPlayer.pauseVideo();
+                } else {
+                    syncYouTubeVolume();
+                    ytPlayer.playVideo();
+                }
+                updateYouTubeControls();
+                return;
+            }
+            if (currentExternalTrack && currentExternalTrack.type === 'spotify') {
+                if (spotifyController && !spotifyIsPaused) spotifyController.pause();
+                else if (spotifyController) spotifyController.play();
+                return;
+            }
             if (audio.paused) {
                 audio.play();
             } else {
@@ -1518,10 +1753,17 @@ HTML_TEMPLATE = r"""
             } else if (!isShuffle && originalQueue.length > 0) {
                 let currentItem = currentQueue[currentIndex];
                 currentQueue = [...originalQueue];
-                currentIndex = currentQueue.findIndex(s => s.filename === currentItem.filename);
+                const currentKey = getQueueTrackKey(currentItem);
+                currentIndex = currentQueue.findIndex(song => getQueueTrackKey(song) === currentKey);
                 if(currentIndex === -1) currentIndex = 0;
             }
             renderQueue();
+        }
+
+        function getQueueTrackKey(track) {
+            if (track.type === 'external') return `youtube:${track.youtube_id}`;
+            if (track.type === 'spotify') return `spotify:${track.spotify_id}`;
+            return `local:${track.filename}`;
         }
 
         function toggleRepeat() {
@@ -1564,6 +1806,8 @@ HTML_TEMPLATE = r"""
             if(el) el.classList.add('active');
 
             document.getElementById('global-search').value = '';
+            searchSequence++;
+            if (searchTimeoutId) clearTimeout(searchTimeoutId);
 
             if (messagePollInterval) {
                 clearInterval(messagePollInterval);
@@ -1590,11 +1834,100 @@ HTML_TEMPLATE = r"""
 
         function handleSearch(query) {
             let q = query.toLowerCase().trim();
+            searchSequence++;
+            const sequence = searchSequence;
+            if (searchTimeoutId) clearTimeout(searchTimeoutId);
             if(!q) { renderHome(); return; }
 
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
             let results = allSongs.filter(s => s.title.toLowerCase().includes(q) || s.artist.toLowerCase().includes(q));
-            renderGrid(results, `Search Results for "${query}"`);
+            if (results.length) {
+                renderGrid(results, `Search Results for "${query}"`);
+                return;
+            }
+            searchTimeoutId = setTimeout(() => searchStreamingSources(query, sequence), 350);
+        }
+
+        async function searchStreamingSources(query, sequence) {
+            contentDiv.innerHTML = `<div class="fade-in"><h2>Searching for “${escapeHtml(query)}”</h2><p style="color:var(--subtext);">No local matches. Searching YouTube and available music catalogs...</p><div class="grid" id="streaming-search-results"><div style="color:var(--subtext);">Loading results...</div></div></div>`;
+            const resultsContainer = document.getElementById('streaming-search-results');
+            const requests = await Promise.allSettled([
+                fetch(`/api/search/youtube?q=${encodeURIComponent(query)}`).then(response => response.json()),
+                fetch(`/api/search/spotify?q=${encodeURIComponent(query)}`).then(response => response.json())
+            ]);
+            if (sequence !== searchSequence || !resultsContainer.isConnected) return;
+
+            const youtubeData = requests[0].status === 'fulfilled' ? requests[0].value : { results: [] };
+            const spotifyData = requests[1].status === 'fulfilled' ? requests[1].value : { results: [], available: false };
+            const youtubeTracks = youtubeData.results || [];
+            const spotifyTracks = spotifyData.results || [];
+            resultsContainer.replaceChildren();
+
+            if (!youtubeTracks.length && !spotifyTracks.length) {
+                const message = document.createElement('div');
+                message.style.cssText = 'color:var(--subtext); grid-column:1/-1; padding:20px 0;';
+                message.textContent = 'No results found on YouTube or other available sources.';
+                resultsContainer.appendChild(message);
+                return;
+            }
+
+            youtubeTracks.forEach((track, index) => appendStreamingResult(resultsContainer, track, 'youtube', youtubeTracks, index));
+            spotifyTracks.forEach((track, index) => appendStreamingResult(resultsContainer, track, 'spotify', spotifyTracks, index));
+        }
+
+        function escapeHtml(value) {
+            return String(value).replace(/[&<>"']/g, character => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[character]);
+        }
+
+        function appendStreamingResult(container, track, provider, providerTracks, index) {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.style.textAlign = 'center';
+            const cover = document.createElement('div');
+            cover.className = 'card-img-container';
+            cover.tabIndex = 0;
+            cover.setAttribute('role', 'button');
+            cover.setAttribute('aria-label', `Play ${track.title} by ${track.artist} on ${provider}`);
+            const image = document.createElement('img');
+            image.loading = 'lazy';
+            image.alt = `${track.title} cover`;
+            image.src = track.thumbnail || '';
+            cover.appendChild(image);
+            const playOverlay = document.createElement('div');
+            playOverlay.className = 'card-play-overlay';
+            playOverlay.innerHTML = '<i class="fas fa-play"></i>';
+            cover.appendChild(playOverlay);
+            const info = document.createElement('div');
+            info.className = 'card-info';
+            const title = document.createElement('div');
+            title.className = 'card-title';
+            title.textContent = track.title;
+            title.title = track.title;
+            const artist = document.createElement('div');
+            artist.className = 'card-artist';
+            artist.textContent = track.artist;
+            artist.title = track.artist;
+            const providerLabel = document.createElement('div');
+            providerLabel.style.cssText = 'font-size:12px; color:var(--subtext);';
+            providerLabel.textContent = provider === 'youtube' ? 'YouTube' : 'Spotify';
+            info.append(title, artist, providerLabel);
+            card.append(cover, info);
+            const play = () => {
+                const queue = providerTracks.map(item => provider === 'youtube'
+                    ? { ...item, type: 'external' }
+                    : { ...item, type: 'spotify' });
+                playQueue(queue, index);
+            };
+            cover.addEventListener('click', play);
+            cover.addEventListener('keydown', event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    play();
+                }
+            });
+            container.appendChild(card);
         }
 
         function playQueue(queue, index) {
@@ -1606,6 +1939,8 @@ HTML_TEMPLATE = r"""
             let song = currentQueue[currentIndex];
             if (song.type === 'external') {
                 playExternal(song);
+            } else if (song.type === 'spotify') {
+                playSpotify(song);
             } else {
                 loadTrack(song);
             }
@@ -1626,7 +1961,26 @@ HTML_TEMPLATE = r"""
         // ---- EXTERNAL PLAYBACK ----
         function playExternal(track) {
             // track: { type: 'external', youtube_id, title, artist, thumbnail }
+            if (currentExternalTrack && currentExternalTrack.type === 'external' && ytPlayer) ytPlayer.pauseVideo();
+            pendingSpotifyTrack = null;
+            pendingYouTubeTrack = ytPlayerReady ? null : track;
+            ensureRemotePlayerVisible();
+            if (spotifyController) spotifyController.pause();
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
+            document.getElementById('spotify-host').style.display = 'none';
+            document.getElementById('rp-video').style.display = 'block';
             currentExternalTrack = track;
+            currentSongObj = { filename: `youtube:${track.youtube_id}`, title: track.title, artist: track.artist };
+            syncSpotifyVolume();
+            bassBar.disabled = true;
+            bassBar.title = 'Bass boost is available for local tracks';
+            document.getElementById('like-btn').disabled = false;
+            document.getElementById('dislike-btn').disabled = false;
+            document.getElementById('like-btn').classList.remove('active');
+            document.getElementById('dislike-btn').classList.remove('active');
+            loadRemoteFeedback(currentSongObj.filename);
             // Set UI
             document.getElementById('np-title').innerText = track.title;
             document.getElementById('np-artist').innerText = track.artist;
@@ -1643,27 +1997,109 @@ HTML_TEMPLATE = r"""
                 if (!ytPlayer) {
                     ytPlayer = new YT.Player('rp-video', {
                         videoId: track.youtube_id,
-                        playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0, 'modestbranding': 1, 'rel': 0, 'showinfo': 0, 'mute': 1 },
+                        playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0, 'modestbranding': 1, 'rel': 0, 'showinfo': 0 },
                         events: {
-                            'onReady': (e) => { e.target.playVideo(); }
+                            'onReady': (e) => {
+                                e.target.unMute();
+                                e.target.setVolume(Number(volumeBar.value));
+                                e.target.playVideo();
+                                startYouTubeControlPolling();
+                            },
+                            'onStateChange': (event) => {
+                                updateYouTubeControls();
+                                if (event.data === YT.PlayerState.ENDED) nextTrack();
+                            }
                         }
                     });
                 } else {
                     ytPlayer.loadVideoById(track.youtube_id);
+                    ytPlayer.unMute();
+                    ytPlayer.setVolume(Number(volumeBar.value));
+                    ytPlayer.playVideo();
+                    startYouTubeControlPolling();
                 }
             }
 
-            audio.src = 'data:audio/mpeg;base64,//uQxAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAEAAABh4C' +
-                '/////////////////////////////////////////////////////////////////////////////////////////////////////////////';
-            audio.pause();
             progressBar.disabled = true;
+            progressBar.value = 0;
             timeCurrentEl.innerText = '--:--';
             timeTotalEl.innerText = '--:--';
-            document.getElementById('np-artist').innerHTML = track.artist + ' <span class="external-badge">YouTube</span>';
+            setPlaybackUi(false);
+            document.getElementById('np-artist').innerHTML = `${escapeHtml(track.artist)} <span class="external-badge">YouTube</span>`;
             lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">Live lyrics not available for external tracks.</div>';
             syncedLyrics = [];
             activeLyricIndex = -1;
-            audio.play();
+        }
+
+        function playSpotify(track) {
+            pendingYouTubeTrack = null;
+            pendingSpotifyTrack = spotifyIframeApi ? null : track;
+            ensureRemotePlayerVisible();
+            if (ytPlayer) ytPlayer.stopVideo();
+            if (spotifyController) spotifyController.pause();
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
+            currentExternalTrack = track;
+            currentSongObj = { filename: `spotify:${track.spotify_id}`, title: track.title, artist: track.artist };
+            syncSpotifyVolume();
+            bassBar.disabled = true;
+            bassBar.title = 'Bass boost is available for local tracks';
+            document.getElementById('like-btn').disabled = false;
+            document.getElementById('dislike-btn').disabled = false;
+            document.getElementById('like-btn').classList.remove('active');
+            document.getElementById('dislike-btn').classList.remove('active');
+            loadRemoteFeedback(currentSongObj.filename);
+            document.getElementById('np-title').innerText = track.title;
+            document.getElementById('np-artist').innerText = track.artist;
+            document.getElementById('rp-title').innerText = track.title;
+            document.getElementById('rp-artist').innerText = track.artist;
+            const coverUrl = track.thumbnail || '';
+            document.getElementById('np-cover').src = coverUrl;
+            document.getElementById('rp-cover').src = coverUrl;
+            document.getElementById('rp-cover-glow').style.backgroundImage = coverUrl ? `url("${coverUrl}")` : '';
+            document.getElementById('download-btn').style.display = 'none';
+            document.getElementById('rp-video').style.display = 'none';
+            const spotifyHost = document.getElementById('spotify-host');
+            spotifyHost.style.display = 'block';
+            spotifyDuration = 0;
+            spotifyPosition = 0;
+            spotifyIsPaused = true;
+            timeCurrentEl.innerText = '0:00';
+            timeTotalEl.innerText = '0:00';
+            progressBar.value = 0;
+            document.getElementById('np-artist').innerHTML = `${escapeHtml(track.artist)} <span class="external-badge">Spotify</span>`;
+            updateMediaSession(track, coverUrl);
+            lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">Live lyrics are not available for streaming tracks.</div>';
+            syncedLyrics = [];
+            activeLyricIndex = -1;
+            progressBar.disabled = false;
+
+            if (!spotifyIframeApi) return;
+            const uri = `spotify:track:${track.spotify_id}`;
+            if (spotifyController) {
+                spotifyController.loadUri(uri);
+                spotifyController.play();
+                return;
+            }
+
+            spotifyIframeApi.createController(spotifyHost, { uri, width: '100%', height: '152' }, controller => {
+                spotifyController = controller;
+                controller.addListener('playback_update', event => {
+                    if (!currentExternalTrack || currentExternalTrack.type !== 'spotify') return;
+                    const state = event.data || {};
+                    spotifyDuration = state.duration || 0;
+                    spotifyPosition = state.position || 0;
+                    spotifyIsPaused = Boolean(state.isPaused);
+                    timeCurrentEl.innerText = formatTime(spotifyPosition / 1000);
+                    timeTotalEl.innerText = formatTime(spotifyDuration / 1000);
+                    progressBar.value = spotifyDuration ? (spotifyPosition / spotifyDuration) * 100 : 0;
+                    updateSliderFill(progressBar);
+                    setPlaybackUi(!spotifyIsPaused);
+                });
+                syncSpotifyVolume();
+                controller.play();
+            });
         }
 
         // ---- Wishlist Functions ----
@@ -1811,10 +2247,10 @@ HTML_TEMPLATE = r"""
                     <h2 style="display: flex; align-items: center; gap: 12px;">
                         <i class="fas fa-search-plus" style="color: var(--accent);"></i> Discover Music
                     </h2>
-                    <p style="color: var(--subtext); margin-bottom: 24px;">Search for any song on YouTube, play it instantly, and add it to your wishlist for the admin to manually source.</p>
+                    <p style="color: var(--subtext); margin-bottom: 24px;">Search YouTube and available music catalogs, then play results in the app.</p>
                     <div style="display: flex; gap: 12px; margin-bottom: 24px;">
-                        <input type="text" id="discover-search-input" class="mono-url-input" placeholder="Search for a song..." style="flex: 1; padding: 14px 20px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; font-family: 'Outfit', sans-serif;">
-                        <button class="action-btn" style="background: var(--accent); color: black; padding: 14px 28px; font-weight: 800; border-radius: 30px; box-shadow: 0 5px 15px rgba(29,185,84,0.3);" onclick="searchYouTube()">
+                        <input type="text" id="discover-search-input" class="mono-url-input" placeholder="Search for a song..." onkeydown="if(event.key === 'Enter') searchStreamingCatalogs()" style="flex: 1; padding: 14px 20px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; font-family: 'Outfit', sans-serif;">
+                        <button class="action-btn" style="background: var(--accent); color: black; padding: 14px 28px; font-weight: 800; border-radius: 30px; box-shadow: 0 5px 15px rgba(29,185,84,0.3);" onclick="searchStreamingCatalogs()">
                             <i class="fas fa-search"></i> Search
                         </button>
                     </div>
@@ -1825,52 +2261,38 @@ HTML_TEMPLATE = r"""
             `;
         }
 
-        async function searchYouTube() {
+        let discoverSearchSequence = 0;
+
+        async function searchStreamingCatalogs() {
             const input = document.getElementById('discover-search-input');
             const query = input.value.trim();
             if (!query) return alert("Please enter a search term.");
 
+            const sequence = ++discoverSearchSequence;
             const resultsDiv = document.getElementById('discover-results');
             resultsDiv.innerHTML = '<div style="text-align:center; padding: 40px; color:rgba(255,255,255,0.5); grid-column: 1 / -1;"><i class="fas fa-spinner fa-spin"></i> Searching...</div>';
 
-            try {
-                const resp = await fetch(`/api/search/youtube?q=${encodeURIComponent(query)}`);
-                const data = await resp.json();
-                if (data.error) {
-                    resultsDiv.innerHTML = `<div style="text-align:center; padding: 40px; color:#ff5555; grid-column: 1 / -1;">Error: ${data.error}</div>`;
-                    return;
-                }
-                if (data.results.length === 0) {
-                    resultsDiv.innerHTML = `<div style="text-align:center; padding: 40px; color:rgba(255,255,255,0.4); grid-column: 1 / -1;">No results found.</div>`;
-                    return;
-                }
+            const requests = await Promise.allSettled([
+                fetch(`/api/search/youtube?q=${encodeURIComponent(query)}`).then(response => response.json()),
+                fetch(`/api/search/spotify?q=${encodeURIComponent(query)}`).then(response => response.json())
+            ]);
+            if (sequence !== discoverSearchSequence || !resultsDiv.isConnected) return;
 
-                let html = '';
-                data.results.forEach(item => {
-                    const cleanTitle = item.title.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
-                    const cleanArtist = item.artist.replace(/"/g, '&quot;').replace(/'/g, "&#39;");
-                    const isInWishlist = wishlist.some(w => w.type === 'external' && w.youtube_id === item.youtube_id);
-                    html += `
-                        <div class="card" style="text-align:center;">
-                            <div class="card-img-container" onclick="playExternal({type:'external', youtube_id:'${item.youtube_id}', title:'${cleanTitle}', artist:'${cleanArtist}', thumbnail:'${item.thumbnail}'})">
-                                <img src="${item.thumbnail}" loading="lazy">
-                                <div class="card-play-overlay"><i class="fas fa-play" style="margin-left: 2px;"></i></div>
-                            </div>
-                            <div class="card-info">
-                                <div class="card-title" title="${cleanTitle}">${cleanTitle}</div>
-                                <div class="card-artist" title="${cleanArtist}">${cleanArtist}</div>
-                                <div style="display:flex; justify-content:center; gap: 8px; margin-top: 8px;">
-                                    <button class="wishlist-btn ${isInWishlist ? 'active' : ''}" data-ytid="${item.youtube_id}" onclick="toggleWishlist({type:'external', youtube_id:'${item.youtube_id}', title:'${cleanTitle}', artist:'${cleanArtist}', thumbnail:'${item.thumbnail}'})" title="Add to Wishlist"><i class="fas fa-star"></i></button>
-                                    <button class="action-btn" style="padding: 6px 10px;" onclick="playExternal({type:'external', youtube_id:'${item.youtube_id}', title:'${cleanTitle}', artist:'${cleanArtist}', thumbnail:'${item.thumbnail}'})"><i class="fas fa-play"></i></button>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                });
-                resultsDiv.innerHTML = html;
-            } catch (e) {
-                resultsDiv.innerHTML = `<div style="text-align:center; padding: 40px; color:#ff5555; grid-column: 1 / -1;">Failed to search: ${e.message}</div>`;
+            const youtubeData = requests[0].status === 'fulfilled' ? requests[0].value : { results: [] };
+            const spotifyData = requests[1].status === 'fulfilled' ? requests[1].value : { results: [], available: false };
+            const youtubeTracks = youtubeData.results || [];
+            const spotifyTracks = spotifyData.results || [];
+            resultsDiv.replaceChildren();
+
+            if (!youtubeTracks.length && !spotifyTracks.length) {
+                const message = document.createElement('div');
+                message.style.cssText = 'text-align:center; padding:40px; color:var(--subtext); grid-column:1/-1;';
+                message.textContent = 'No results found on YouTube or other available sources.';
+                resultsDiv.appendChild(message);
+                return;
             }
+            youtubeTracks.forEach((track, index) => appendStreamingResult(resultsDiv, track, 'youtube', youtubeTracks, index));
+            spotifyTracks.forEach((track, index) => appendStreamingResult(resultsDiv, track, 'spotify', spotifyTracks, index));
         }
 
         // ---- End Discover ----
@@ -2354,7 +2776,19 @@ HTML_TEMPLATE = r"""
         function loadTrack(songObj) {
             if (!songObj) return;
             currentSongObj = songObj;
+            pendingSpotifyTrack = null;
+            pendingYouTubeTrack = null;
+            if (spotifyController) spotifyController.pause();
+            document.getElementById('spotify-host').style.display = 'none';
+            document.getElementById('rp-video').style.display = 'block';
             currentExternalTrack = null;
+            syncSpotifyVolume();
+            if (ytPlayer) ytPlayer.stopVideo();
+            progressBar.disabled = false;
+            bassBar.disabled = false;
+            bassBar.title = 'Bass Boost';
+            document.getElementById('like-btn').disabled = false;
+            document.getElementById('dislike-btn').disabled = false;
 
             let fileUrl = `/play/` + songObj.filename.split('/').map(encodeURIComponent).join('/');
             audio.src = fileUrl;
@@ -2387,10 +2821,11 @@ HTML_TEMPLATE = r"""
                                 videoId: data.youtube_id,
                                 playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0, 'modestbranding': 1, 'rel': 0, 'showinfo': 0, 'mute': 1 },
                                 events: {
-                                    'onReady': (e) => { e.target.playVideo(); }
+                                    'onReady': (e) => { e.target.mute(); e.target.playVideo(); }
                                 }
                             });
                         } else {
+                            ytPlayer.mute();
                             ytPlayer.loadVideoById(data.youtube_id);
                         }
                     } else if (ytPlayer) {
@@ -2512,7 +2947,7 @@ HTML_TEMPLATE = r"""
                 if (currentIndex >= currentQueue.length) {
                     currentIndex = 0;
                     if (!isRepeat) {
-                        audio.pause();
+                        pauseCurrentPlayback();
                         renderQueue();
                         return;
                     }
@@ -2520,6 +2955,8 @@ HTML_TEMPLATE = r"""
                 let nextSong = currentQueue[currentIndex];
                 if (nextSong.type === 'external') {
                     playExternal(nextSong);
+                } else if (nextSong.type === 'spotify') {
+                    playSpotify(nextSong);
                 } else {
                     loadTrack(nextSong);
                 }
@@ -2527,6 +2964,14 @@ HTML_TEMPLATE = r"""
         }
 
         function prevTrack() {
+            if (currentExternalTrack && currentExternalTrack.type === 'external' && ytPlayer && ytPlayer.getCurrentTime() > 3) {
+                ytPlayer.seekTo(0, true);
+                return;
+            }
+            if (currentExternalTrack && currentExternalTrack.type === 'spotify' && spotifyPosition > 3000) {
+                if (spotifyController) spotifyController.seek(0);
+                return;
+            }
             if (audio.currentTime > 3) {
                 audio.currentTime = 0;
             } else if (!isRadioMode && currentQueue.length > 0) {
@@ -2535,6 +2980,8 @@ HTML_TEMPLATE = r"""
                 let prevSong = currentQueue[currentIndex];
                 if (prevSong.type === 'external') {
                     playExternal(prevSong);
+                } else if (prevSong.type === 'spotify') {
+                    playSpotify(prevSong);
                 } else {
                     loadTrack(prevSong);
                 }
@@ -3030,6 +3477,17 @@ HTML_TEMPLATE = r"""
                 }
                 refreshStatsUI();
             });
+        }
+
+        function loadRemoteFeedback(songKey) {
+            fetch(`/api/status?song=${encodeURIComponent(songKey)}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (!currentSongObj || currentSongObj.filename !== songKey) return;
+                    document.getElementById('like-btn').classList.toggle('active', data.liked);
+                    document.getElementById('dislike-btn').classList.toggle('active', data.disliked);
+                })
+                .catch(error => console.warn('Could not load track feedback state', error));
         }
 
         function fetchStatusAndLog(filename) {
@@ -3624,6 +4082,20 @@ def api_search_youtube():
 
     results = search_youtube(query, max_results=20)
     return jsonify({"results": results})
+
+@app.route('/api/search/spotify')
+def api_search_spotify():
+    if 'user' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify({"error": "Missing query"}), 400
+
+    results = search_spotify(query)
+    if results is None:
+        return jsonify({"results": [], "available": False})
+    return jsonify({"results": results, "available": True})
 
 # ---- MONOCHROME API ROUTES ----
 @app.route('/api/monochrome/fetch', methods=['POST'])
