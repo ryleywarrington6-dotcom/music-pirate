@@ -2,3 +2,4 @@ Flask==3.0.3
 mutagen==1.47.0
 Werkzeug==3.0.3
 gunicorn==21.2.0
+yt-dlp[default]
