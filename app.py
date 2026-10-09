@@ -551,6 +551,22 @@ def is_ffmpeg_available():
         return True
     return shutil.which('ffmpeg') is not None
 
+def resolve_ffmpeg_path():
+    """Return the best available ffmpeg executable path, or None."""
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    local_ffmpeg = os.path.join(app_dir, 'ffmpeg')
+    if os.path.exists(local_ffmpeg) and os.access(local_ffmpeg, os.X_OK):
+        return local_ffmpeg
+    return shutil.which('ffmpeg')
+
+def find_ytdlp():
+    """Locate yt-dlp or youtube-dl on the system."""
+    for name in ('yt-dlp', 'youtube-dl'):
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
 # ---------------------------------------------------------
 # HTML TEMPLATES (Full)
 # ---------------------------------------------------------
@@ -855,6 +871,7 @@ HTML_TEMPLATE = r"""
         .wishlist-btn:hover { transform: scale(1.2); }
 
         .external-badge { background: rgba(255, 204, 0, 0.2); color: #ffcc00; padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 700; margin-left: 6px; }
+        .eq-badge { background: rgba(29, 185, 84, 0.25); color: #1ed760; padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 700; margin-left: 6px; }
 
         @media (max-width: 768px) {
             body { flex-direction: column; overflow: auto; }
@@ -931,6 +948,9 @@ HTML_TEMPLATE = r"""
             <button class="btn" onclick="prevTrack()"><i class="fas fa-step-backward"></i></button>
             <button class="btn play-btn" style="width:34px; height:34px;" onclick="togglePlay()"><i class="fas fa-play" id="mp-play-icon"></i></button>
             <button class="btn" onclick="nextTrack()"><i class="fas fa-step-forward"></i></button>
+            <button class="btn" id="yt-eq-toggle" onclick="toggleYoutubeProxy()" title="Toggle EQ mode for YouTube (routes audio through Web Audio filters)" style="font-size:14px;">
+                <i class="fas fa-sliders-h"></i>
+            </button>
         </div>
     </div>
 
@@ -1087,16 +1107,25 @@ HTML_TEMPLATE = r"""
         let currentChatFriend = null;
         let messagePollInterval = null;
 
+        // --- YouTube playback state ---
+        // ytMode: 'none' | 'iframe' (normal, no EQ) | 'proxy' (audio through <audio>, EQ works)
+        let ytMode = 'none';
         let ytPlayer = null;
         let ytPlayerReady = false;
         let youtubePlaybackPollId = null;
-        let pendingYouTubeTrack = null;
+        let pendingYoutubeVideo = null;   // { videoId, muted } queued until the API is ready
+        let ytSyncInterval = null;        // keeps muted iframe video aligned with proxied audio
+
+        // --- YouTube audio proxy (enables EQ on YouTube) ---
+        let ytAudioProxyAvailable = false;
+        let useYtAudioProxy = true;       // user preference — default ON, iframe is the backup
+
         function onYouTubeIframeAPIReady() {
             ytPlayerReady = true;
-            if (pendingYouTubeTrack) {
-                const track = pendingYouTubeTrack;
-                pendingYouTubeTrack = null;
-                playExternal(track);
+            if (pendingYoutubeVideo) {
+                const cfg = pendingYoutubeVideo;
+                pendingYoutubeVideo = null;
+                attachYoutubeVideo(cfg.videoId, cfg.muted);
             }
         }
 
@@ -1260,7 +1289,9 @@ HTML_TEMPLATE = r"""
         }
 
         function syncYouTubeVolume() {
-            if (!ytPlayer || !currentExternalTrack || currentExternalTrack.type !== 'external') return;
+            if (!ytPlayer || !currentExternalTrack) return;
+            // Only the raw iframe path uses the YouTube player's own volume.
+            if (currentExternalTrack.type !== 'external' || ytMode !== 'iframe') return;
             const volume = Number(volumeBar.value);
             if (volume === 0) {
                 ytPlayer.mute();
@@ -1290,7 +1321,8 @@ HTML_TEMPLATE = r"""
         }
 
         function updateYouTubeControls() {
-            if (!currentExternalTrack || currentExternalTrack.type !== 'external' || !ytPlayer || !ytPlayerReady) {
+            if (!currentExternalTrack || currentExternalTrack.type !== 'external' || ytMode !== 'iframe'
+                || !ytPlayer || !ytPlayerReady) {
                 if (youtubePlaybackPollId) {
                     clearInterval(youtubePlaybackPollId);
                     youtubePlaybackPollId = null;
@@ -1316,10 +1348,73 @@ HTML_TEMPLATE = r"""
             updateYouTubeControls();
         }
 
+        function stopYoutubeControlPolling() {
+            if (youtubePlaybackPollId) {
+                clearInterval(youtubePlaybackPollId);
+                youtubePlaybackPollId = null;
+            }
+        }
+
+        function stopYoutubeSync() {
+            if (ytSyncInterval) {
+                clearInterval(ytSyncInterval);
+                ytSyncInterval = null;
+            }
+        }
+
+        function attachYoutubeVideo(videoId, muted) {
+            if (!ytPlayerReady) {
+                pendingYoutubeVideo = { videoId, muted };
+                return;
+            }
+            if (!ytPlayer) {
+                ytPlayer = new YT.Player('rp-video', {
+                    videoId,
+                    playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0,
+                                  'modestbranding': 1, 'rel': 0, 'showinfo': 0, 'mute': muted ? 1 : 0 },
+                    events: {
+                        'onReady': (e) => {
+                            if (muted) {
+                                e.target.mute();
+                            } else {
+                                e.target.unMute();
+                                e.target.setVolume(Number(volumeBar.value));
+                            }
+                            e.target.playVideo();
+                            if (ytMode === 'iframe') startYouTubeControlPolling();
+                        },
+                        'onStateChange': (event) => {
+                            if (ytMode === 'iframe') {
+                                updateYouTubeControls();
+                                if (event.data === YT.PlayerState.ENDED) nextTrack();
+                            }
+                        }
+                    }
+                });
+            } else {
+                ytPlayer.loadVideoById(videoId);
+                if (muted) {
+                    ytPlayer.mute();
+                } else {
+                    ytPlayer.unMute();
+                    ytPlayer.setVolume(Number(volumeBar.value));
+                }
+                ytPlayer.playVideo();
+                if (ytMode === 'iframe') startYouTubeControlPolling();
+            }
+        }
+
         function pauseCurrentPlayback() {
-            if (currentExternalTrack && currentExternalTrack.type === 'external' && ytPlayer) ytPlayer.pauseVideo();
-            else if (currentExternalTrack && currentExternalTrack.type === 'spotify' && spotifyController) spotifyController.pause();
-            else audio.pause();
+            if (currentExternalTrack && currentExternalTrack.type === 'external' && ytMode === 'iframe' && ytPlayer) {
+                ytPlayer.pauseVideo();
+            } else if (currentExternalTrack && currentExternalTrack.type === 'spotify' && spotifyController) {
+                spotifyController.pause();
+            } else {
+                audio.pause();
+                if (ytMode === 'proxy' && ytPlayer) {
+                    try { ytPlayer.pauseVideo(); } catch (e) {}
+                }
+            }
         }
 
         mpDragHandle.addEventListener('mousedown', (e) => {
@@ -1415,7 +1510,8 @@ HTML_TEMPLATE = r"""
         });
 
         document.addEventListener('keydown', (e) => {
-            if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+            if (e.defaultPrevented || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+            if (e.target.isContentEditable || e.target.closest('input, textarea, select, button, a, [role="button"]')) return;
             if(e.code === 'Space') { e.preventDefault(); togglePlay(); }
             if(e.code === 'ArrowRight') { e.preventDefault(); nextTrack(); }
             if(e.code === 'ArrowLeft') { e.preventDefault(); prevTrack(); }
@@ -1544,7 +1640,7 @@ HTML_TEMPLATE = r"""
         function safeId(str) { return encodeURIComponent(str).replace(/[^a-zA-Z0-9]/g, ''); }
 
         function getCoverUrl(song) {
-            if (song.type === 'external') {
+            if (song.type === 'external' || song.type === 'external_proxy') {
                 return song.thumbnail || '';
             }
             return `/api/cover?file=${encodeURIComponent(song.filename)}`;
@@ -1555,7 +1651,8 @@ HTML_TEMPLATE = r"""
                 navigator.mediaSession.metadata = new MediaMetadata({
                     title: songObj.title,
                     artist: songObj.artist,
-                    album: songObj.type === 'external' ? 'YouTube' : songObj.type === 'spotify' ? 'Spotify' : 'Streamer Pro',
+                    album: songObj.type === 'external' || songObj.type === 'external_proxy' ? 'YouTube'
+                         : songObj.type === 'spotify' ? 'Spotify' : 'Streamer Pro',
                     artwork: [ { src: coverUrl, sizes: '500x500', type: 'image/jpeg' } ]
                 });
 
@@ -1591,6 +1688,10 @@ HTML_TEMPLATE = r"""
             eqAnim.classList.remove('paused');
             eqAnim.classList.add('playing');
 
+            // In proxy mode keep the video in sync with audio
+            if (ytMode === 'proxy' && ytPlayer) {
+                try { ytPlayer.playVideo(); } catch (e) {}
+            }
         });
 
         audio.addEventListener('pause', () => {
@@ -1604,14 +1705,30 @@ HTML_TEMPLATE = r"""
 
             eqAnim.classList.add('paused');
 
+            if (ytMode === 'proxy' && ytPlayer) {
+                try { ytPlayer.pauseVideo(); } catch (e) {}
+            }
         });
 
         audio.addEventListener('loadedmetadata', () => {
+            // The proxy successfully delivered audio — cancel the watchdog and
+            // clear the failure streak so future tracks get the EQ path again.
+            clearYtProxyTimeout();
+            if (ytMode === 'proxy') ytProxyConsecutiveFails = 0;
             timeTotalEl.innerText = formatTime(audio.duration);
         });
 
+        // If the YouTube EQ proxy fails (server returned a non-2xx, the stream
+        // died, or the browser refused the source), route through the fallback
+        // handler which drops to raw iframe playback for this track.
+        audio.addEventListener('error', () => {
+            if (ytMode !== 'proxy') return;
+            if (!currentExternalTrack) return;
+            handleYtProxyFailure('audio-error');
+        });
+
         audio.addEventListener('timeupdate', () => {
-            if (!audio.duration) return;
+            if (!audio.duration || !isFinite(audio.duration)) return;
             const percent = (audio.currentTime / audio.duration) * 100;
             progressBar.value = percent;
             updateSliderFill(progressBar);
@@ -1675,7 +1792,7 @@ HTML_TEMPLATE = r"""
         });
 
         progressBar.addEventListener('input', function() {
-            if (currentExternalTrack && currentExternalTrack.type === 'external') {
+            if (currentExternalTrack && currentExternalTrack.type === 'external' && ytMode === 'iframe') {
                 if (ytPlayer && ytPlayer.getDuration() > 0) {
                     ytPlayer.seekTo((this.value / 100) * ytPlayer.getDuration(), true);
                 }
@@ -1690,7 +1807,7 @@ HTML_TEMPLATE = r"""
                 updateSliderFill(this);
                 return;
             }
-            if (!audio.duration) return;
+            if (!audio.duration || !isFinite(audio.duration)) return;
             audio.currentTime = (this.value / 100) * audio.duration;
             updateSliderFill(this);
         });
@@ -1714,6 +1831,20 @@ HTML_TEMPLATE = r"""
 
         function togglePlay() {
             animateButton('play-btn-wrapper');
+
+            // --- Proxied YouTube: audio element carries everything, EQ works ---
+            if (ytMode === 'proxy' && currentExternalTrack && currentExternalTrack.type === 'external_proxy') {
+                if (audio.paused) {
+                    audio.play().catch(err => console.warn('Proxy play failed:', err));
+                    if (ytPlayer) { try { ytPlayer.playVideo(); } catch (e) {} }
+                } else {
+                    audio.pause();
+                    if (ytPlayer) { try { ytPlayer.pauseVideo(); } catch (e) {} }
+                }
+                return;
+            }
+
+            // --- Raw iframe YouTube: control the YT player directly ---
             if (currentExternalTrack && currentExternalTrack.type === 'external') {
                 if (!ytPlayer || !ytPlayerReady) return;
                 const state = ytPlayer.getPlayerState();
@@ -1726,11 +1857,13 @@ HTML_TEMPLATE = r"""
                 updateYouTubeControls();
                 return;
             }
+
             if (currentExternalTrack && currentExternalTrack.type === 'spotify') {
                 if (spotifyController && !spotifyIsPaused) spotifyController.pause();
                 else if (spotifyController) spotifyController.play();
                 return;
             }
+
             if (audio.paused) {
                 audio.play();
             } else {
@@ -1761,7 +1894,7 @@ HTML_TEMPLATE = r"""
         }
 
         function getQueueTrackKey(track) {
-            if (track.type === 'external') return `youtube:${track.youtube_id}`;
+            if (track.type === 'external' || track.type === 'external_proxy') return `youtube:${track.youtube_id}`;
             if (track.type === 'spotify') return `spotify:${track.spotify_id}`;
             return `local:${track.filename}`;
         }
@@ -1773,10 +1906,88 @@ HTML_TEMPLATE = r"""
         }
 
         function formatTime(secs) {
-            if (isNaN(secs)) return "0:00";
+            if (isNaN(secs) || !isFinite(secs)) return "0:00";
             const m = Math.floor(secs / 60);
             const s = Math.floor(secs % 60).toString().padStart(2, '0');
             return `${m}:${s}`;
+        }
+
+        // ---- Toast notifications ----
+        function showToast(message, durationMs = 3500) {
+            let container = document.getElementById('toast-container');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'toast-container';
+                container.style.cssText =
+                    'position:fixed; bottom:120px; left:50%; transform:translateX(-50%);' +
+                    'z-index:5000; display:flex; flex-direction:column; gap:8px;' +
+                    'align-items:center; pointer-events:none;';
+                document.body.appendChild(container);
+            }
+            const toast = document.createElement('div');
+            toast.style.cssText =
+                'background:rgba(20,20,20,0.95); color:#fff; padding:12px 20px;' +
+                'border-radius:24px; font-weight:600; font-size:14px;' +
+                'box-shadow:0 10px 30px rgba(0,0,0,0.5);' +
+                'border:1px solid rgba(255,255,255,0.1);' +
+                'backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);' +
+                'opacity:0; transition:opacity 0.3s ease;';
+            toast.textContent = message;
+            container.appendChild(toast);
+            requestAnimationFrame(() => { toast.style.opacity = '1'; });
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 400);
+            }, durationMs);
+        }
+
+        // ---- YouTube proxy health tracking ----
+        // Default behaviour: try the EQ-enabled proxy first. If it fails (server
+        // 502, network error, or timeout), silently fall back to raw iframe
+        // playback for that track. After 3 consecutive failures, disable the
+        // proxy for the rest of the session (user can re-enable via the toggle).
+        let ytProxyFailTimer = null;
+        let ytProxyConsecutiveFails = 0;
+
+        function armYtProxyTimeout() {
+            clearYtProxyTimeout();
+            ytProxyFailTimer = setTimeout(() => {
+                if (ytMode !== 'proxy') return;
+                if (audio.readyState >= 2) return; // HAVE_CURRENT_DATA — it's playing
+                console.warn('YouTube EQ: proxy did not start in time, falling back');
+                handleYtProxyFailure('timeout');
+            }, 8000);
+        }
+
+        function clearYtProxyTimeout() {
+            if (ytProxyFailTimer) {
+                clearTimeout(ytProxyFailTimer);
+                ytProxyFailTimer = null;
+            }
+        }
+
+        function handleYtProxyFailure(reason) {
+            clearYtProxyTimeout();
+            if (ytMode !== 'proxy' || !currentExternalTrack) return;
+
+            ytProxyConsecutiveFails++;
+            console.warn(
+                `YouTube EQ playback failed (${reason}); falling back to standard playback. ` +
+                `Consecutive fails: ${ytProxyConsecutiveFails}`
+            );
+
+            if (ytProxyConsecutiveFails >= 3) {
+                // Give up on proxy for this session so we don't thrash.
+                useYtAudioProxy = false;
+                const btn = document.getElementById('yt-eq-toggle');
+                if (btn) btn.classList.remove('active');
+                showToast('YouTube EQ unavailable — standard playback active for this session');
+            } else {
+                showToast('YouTube EQ unavailable for this track — using standard playback');
+            }
+
+            const fallback = { ...currentExternalTrack, type: 'external' };
+            playExternal(fallback, { forceIframe: true });
         }
 
         fetch('/api/data').then(res => res.json()).then(data => {
@@ -1787,6 +1998,41 @@ HTML_TEMPLATE = r"""
                 switchView('home');
             });
         });
+
+        // Capability probe — does the server support YouTube audio proxying?
+        fetch('/api/capabilities').then(res => res.json()).then(caps => {
+            ytAudioProxyAvailable = !!caps.youtube_audio_proxy;
+            const btn = document.getElementById('yt-eq-toggle');
+            if (btn) {
+                if (!ytAudioProxyAvailable) {
+                    btn.style.display = 'none';
+                } else {
+                    btn.classList.toggle('active', useYtAudioProxy);
+                }
+            }
+        }).catch(() => {
+            const btn = document.getElementById('yt-eq-toggle');
+            if (btn) btn.style.display = 'none';
+        });
+
+        function toggleYoutubeProxy() {
+            useYtAudioProxy = !useYtAudioProxy;
+            const btn = document.getElementById('yt-eq-toggle');
+            if (btn) btn.classList.toggle('active', useYtAudioProxy);
+
+            // Manually toggling resets the failure streak, so the user's intent
+            // is honoured even after the auto-disable kicked in.
+            ytProxyConsecutiveFails = 0;
+
+            // If a YouTube track is currently active, reload it to switch modes.
+            if (currentExternalTrack &&
+                (currentExternalTrack.type === 'external' || currentExternalTrack.type === 'external_proxy')) {
+                const isProxy = currentExternalTrack.type === 'external_proxy';
+                if (isProxy !== useYtAudioProxy) {
+                    playExternal({ ...currentExternalTrack, type: 'external' });
+                }
+            }
+        }
 
         function processArtists(songs) {
             groupedArtists = {};
@@ -1959,92 +2205,134 @@ HTML_TEMPLATE = r"""
         }
 
         // ---- EXTERNAL PLAYBACK ----
-        function playExternal(track) {
-            // track: { type: 'external', youtube_id, title, artist, thumbnail }
-            if (currentExternalTrack && currentExternalTrack.type === 'external' && ytPlayer) ytPlayer.pauseVideo();
-            pendingSpotifyTrack = null;
-            pendingYouTubeTrack = ytPlayerReady ? null : track;
-            ensureRemotePlayerVisible();
+        // opts.forceIframe — skip the EQ proxy and go straight to raw iframe playback.
+        //                     Used internally when the proxy fails for a track.
+        function playExternal(track, opts = {}) {
+            const forceIframe = !!opts.forceIframe;
+
+            // Stop anything currently playing
+            if (ytPlayer && ytMode === 'iframe') {
+                try { ytPlayer.pauseVideo(); } catch (e) {}
+            }
+            stopYoutubeControlPolling();
+            stopYoutubeSync();
+            clearYtProxyTimeout();
             if (spotifyController) spotifyController.pause();
-            audio.pause();
-            audio.removeAttribute('src');
-            audio.load();
+
+            pendingSpotifyTrack = null;
+            ensureRemotePlayerVisible();
+
             document.getElementById('spotify-host').style.display = 'none';
             document.getElementById('rp-video').style.display = 'block';
-            currentExternalTrack = track;
-            currentSongObj = { filename: `youtube:${track.youtube_id}`, title: track.title, artist: track.artist };
+
             syncSpotifyVolume();
-            bassBar.disabled = true;
-            bassBar.title = 'Bass boost is available for local tracks';
+
             document.getElementById('like-btn').disabled = false;
             document.getElementById('dislike-btn').disabled = false;
             document.getElementById('like-btn').classList.remove('active');
             document.getElementById('dislike-btn').classList.remove('active');
-            loadRemoteFeedback(currentSongObj.filename);
-            // Set UI
+            document.getElementById('download-btn').style.display = 'none';
+
+            // ---- Shared UI (title, artist, cover, media session, lyrics placeholder) ----
             document.getElementById('np-title').innerText = track.title;
-            document.getElementById('np-artist').innerText = track.artist;
             document.getElementById('rp-title').innerText = track.title;
             document.getElementById('rp-artist').innerText = track.artist;
-            let coverUrl = track.thumbnail || '';
+            const coverUrl = track.thumbnail || '';
             document.getElementById('np-cover').src = coverUrl;
             document.getElementById('rp-cover').src = coverUrl;
-            document.getElementById('rp-cover-glow').style.backgroundImage = `url("${coverUrl}")`;
-            document.getElementById('download-btn').style.display = 'none';
+            document.getElementById('rp-cover-glow').style.backgroundImage =
+                coverUrl ? `url("${coverUrl}")` : '';
             updateMediaSession(track, coverUrl);
-
-            if (ytPlayerReady) {
-                if (!ytPlayer) {
-                    ytPlayer = new YT.Player('rp-video', {
-                        videoId: track.youtube_id,
-                        playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0, 'modestbranding': 1, 'rel': 0, 'showinfo': 0 },
-                        events: {
-                            'onReady': (e) => {
-                                e.target.unMute();
-                                e.target.setVolume(Number(volumeBar.value));
-                                e.target.playVideo();
-                                startYouTubeControlPolling();
-                            },
-                            'onStateChange': (event) => {
-                                updateYouTubeControls();
-                                if (event.data === YT.PlayerState.ENDED) nextTrack();
-                            }
-                        }
-                    });
-                } else {
-                    ytPlayer.loadVideoById(track.youtube_id);
-                    ytPlayer.unMute();
-                    ytPlayer.setVolume(Number(volumeBar.value));
-                    ytPlayer.playVideo();
-                    startYouTubeControlPolling();
-                }
-            }
-
-            progressBar.disabled = true;
-            progressBar.value = 0;
-            timeCurrentEl.innerText = '--:--';
-            timeTotalEl.innerText = '--:--';
-            setPlaybackUi(false);
-            document.getElementById('np-artist').innerHTML = `${escapeHtml(track.artist)} <span class="external-badge">YouTube</span>`;
-            lyricsContainer.innerHTML = '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">Live lyrics not available for external tracks.</div>';
+            lyricsContainer.innerHTML =
+                '<div style="color:var(--subtext); text-align:center; padding-top:60px; font-weight:600;">Live lyrics not available for external tracks.</div>';
             syncedLyrics = [];
             activeLyricIndex = -1;
+
+            currentSongObj = {
+                filename: `youtube:${track.youtube_id}`,
+                title: track.title,
+                artist: track.artist
+            };
+            loadRemoteFeedback(currentSongObj.filename);
+
+            const canProxy = !forceIframe && ytAudioProxyAvailable && useYtAudioProxy;
+
+            if (canProxy) {
+                // ---------- PROXIED MODE (default): audio through <audio>, EQ works ----------
+                // Clone the track — never mutate the queue item's `type`.
+                ytMode = 'proxy';
+                currentExternalTrack = { ...track, type: 'external_proxy' };
+
+                document.getElementById('np-artist').innerHTML =
+                    `${escapeHtml(track.artist)} <span class="eq-badge"><i class="fas fa-sliders-h" style="font-size:9px;"></i> EQ</span> <span class="external-badge">YouTube</span>`;
+
+                bassBar.disabled = false;
+                bassBar.title = 'Bass Boost';
+                progressBar.disabled = false;
+                progressBar.value = 0;
+                timeCurrentEl.innerText = '0:00';
+                timeTotalEl.innerText = '--:--';
+
+                audio.src = `/api/youtube/audio?v=${encodeURIComponent(track.youtube_id)}`;
+                armYtProxyTimeout();
+                audio.play().catch(err => {
+                    console.warn('YouTube EQ playback rejected:', err);
+                    handleYtProxyFailure('play-rejected');
+                });
+
+                // Keep the muted iframe video visible & loosely synced
+                attachYoutubeVideo(track.youtube_id, /* muted = */ true);
+
+                ytSyncInterval = setInterval(() => {
+                    if (ytMode !== 'proxy' || !ytPlayer || !ytPlayer.getCurrentTime) return;
+                    if (audio.paused) return;
+                    const vTime = ytPlayer.getCurrentTime();
+                    if (Math.abs(vTime - audio.currentTime) > 1.0) {
+                        try { ytPlayer.seekTo(audio.currentTime, true); } catch (e) {}
+                    }
+                }, 5000);
+
+            } else {
+                // ---------- RAW IFRAME MODE (backup, no EQ) ----------
+                ytMode = 'iframe';
+                currentExternalTrack = { ...track, type: 'external' };
+
+                document.getElementById('np-artist').innerHTML =
+                    `${escapeHtml(track.artist)} <span class="external-badge">YouTube</span>`;
+
+                audio.pause();
+                audio.removeAttribute('src');
+                audio.load();
+
+                bassBar.disabled = true;
+                bassBar.title = 'Bass boost is only available for local, Monochrome, and proxied YouTube tracks';
+                progressBar.disabled = true;
+                progressBar.value = 0;
+                timeCurrentEl.innerText = '--:--';
+                timeTotalEl.innerText = '--:--';
+                setPlaybackUi(false);
+
+                attachYoutubeVideo(track.youtube_id, /* muted = */ false);
+            }
         }
 
         function playSpotify(track) {
-            pendingYouTubeTrack = null;
             pendingSpotifyTrack = spotifyIframeApi ? null : track;
             ensureRemotePlayerVisible();
-            if (ytPlayer) ytPlayer.stopVideo();
+            stopYoutubeControlPolling();
+            stopYoutubeSync();
+            clearYtProxyTimeout();
+            ytMode = 'none';
+            if (ytPlayer) { try { ytPlayer.stopVideo(); } catch (e) {} }
             if (spotifyController) spotifyController.pause();
             audio.pause();
             audio.removeAttribute('src');
             audio.load();
-            currentExternalTrack = track;
+            currentExternalTrack = { ...track, type: 'spotify' };
             currentSongObj = { filename: `spotify:${track.spotify_id}`, title: track.title, artist: track.artist };
             syncSpotifyVolume();
             bassBar.disabled = true;
-            bassBar.title = 'Bass boost is available for local tracks';
+            bassBar.title = 'Bass boost is not available for Spotify (DRM-protected stream)';
             document.getElementById('like-btn').disabled = false;
             document.getElementById('dislike-btn').disabled = false;
             document.getElementById('like-btn').classList.remove('active');
@@ -2777,13 +3065,17 @@ HTML_TEMPLATE = r"""
             if (!songObj) return;
             currentSongObj = songObj;
             pendingSpotifyTrack = null;
-            pendingYouTubeTrack = null;
+            pendingYoutubeVideo = null;
+            stopYoutubeControlPolling();
+            stopYoutubeSync();
+            clearYtProxyTimeout();
+            ytMode = 'none';
             if (spotifyController) spotifyController.pause();
+            if (ytPlayer) { try { ytPlayer.stopVideo(); } catch (e) {} }
             document.getElementById('spotify-host').style.display = 'none';
             document.getElementById('rp-video').style.display = 'block';
             currentExternalTrack = null;
             syncSpotifyVolume();
-            if (ytPlayer) ytPlayer.stopVideo();
             progressBar.disabled = false;
             bassBar.disabled = false;
             bassBar.title = 'Bass Boost';
@@ -2829,7 +3121,7 @@ HTML_TEMPLATE = r"""
                             ytPlayer.loadVideoById(data.youtube_id);
                         }
                     } else if (ytPlayer) {
-                        ytPlayer.stopVideo();
+                        try { ytPlayer.stopVideo(); } catch (e) {}
                     }
                 });
 
@@ -2921,7 +3213,7 @@ HTML_TEMPLATE = r"""
         }
 
         function seekTo(timeSeconds) {
-            if(!audio.duration) return;
+            if(!audio.duration || !isFinite(audio.duration)) return;
             audio.currentTime = timeSeconds;
         }
 
@@ -2964,7 +3256,13 @@ HTML_TEMPLATE = r"""
         }
 
         function prevTrack() {
-            if (currentExternalTrack && currentExternalTrack.type === 'external' && ytPlayer && ytPlayer.getCurrentTime() > 3) {
+            // Proxied YouTube: audio element owns the timeline
+            if (ytMode === 'proxy' && audio.currentTime > 3) {
+                audio.currentTime = 0;
+                if (ytPlayer) { try { ytPlayer.seekTo(0, true); } catch (e) {} }
+                return;
+            }
+            if (ytMode === 'iframe' && currentExternalTrack && ytPlayer && ytPlayer.getCurrentTime() > 3) {
                 ytPlayer.seekTo(0, true);
                 return;
             }
@@ -2994,102 +3292,71 @@ HTML_TEMPLATE = r"""
         let monoData = null;
 
         function renderMonochrome() {
+            const buildTemplate = () => `
+                <div class="fade-in" style="max-width: 700px; margin: 0 auto;">
+                    <h2 style="font-size: 32px; display: flex; align-items: center; gap: 12px;">
+                        <i class="fas fa-cloud-download-alt" style="color: var(--accent);"></i> Monochrome Stream Interceptor
+                    </h2>
+                    <p style="color: var(--subtext); margin-bottom: 24px; font-weight: 500;">
+                        Paste a Monochrome track URL below to fetch and play it, or use the userscript to capture streams automatically.
+                    </p>
+
+                    <div style="display: flex; gap: 12px; margin-bottom: 20px;">
+                        <input type="text" id="mono-url-input" class="mono-url-input" placeholder="e.g. https://monochrome.tf/track/abc123">
+                        <button class="action-btn" style="background: var(--accent); color: black; padding: 14px 28px; font-weight: 800; border-radius: 30px; box-shadow: 0 5px 15px rgba(29,185,84,0.3);" onclick="fetchMonochromeViaBrowser()">
+                            <i class="fas fa-search"></i> Fetch
+                        </button>
+                    </div>
+
+                    <div id="mono-result" style="display: none;">
+                        <div class="mono-result">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                                <div>
+                                    <div style="font-weight: 800; font-size: 20px;" id="mono-title">Title</div>
+                                    <div style="color: var(--subtext); font-weight: 500;" id="mono-artist">Artist</div>
+                                </div>
+                                <div style="display: flex; gap: 8px;">
+                                    <button class="action-btn" style="background: rgba(255,255,255,0.1); padding: 8px 16px;" onclick="copyMonoCommand()"><i class="fas fa-copy"></i> Copy FFplay</button>
+                                    <button class="action-btn" id="mono-play-btn" style="background: var(--accent); color: black; padding: 8px 16px; display: none;" onclick="playMonochromeStream()"><i class="fas fa-play"></i> Play in App</button>
+                                </div>
+                            </div>
+                            <div style="font-size: 12px; color: var(--subtext); font-weight: 600;">FFplay Command:</div>
+                            <div class="mono-command" id="mono-command">ffplay -decryption_key ...</div>
+                        </div>
+                    </div>
+
+                    <div id="mono-captured-container"></div>
+                </div>
+            `;
+
+            contentDiv.innerHTML = buildTemplate();
+
             fetch('/api/monochrome/captured')
                 .then(res => res.json())
                 .then(captured => {
-                    let capturedHtml = '';
-                    if (captured && captured.length > 0) {
-                        capturedHtml = '<div style="margin: 20px 0 10px 0; font-weight: 700; font-size: 18px; color: var(--accent);">📦 Captured Streams</div>';
-                        captured.forEach((item) => {
-                            const cmd = `ffplay -decryption_key ${item.decryption_key} -i "${item.stream_url}" -nodisp -autoexit`;
-                            capturedHtml += `
-                            <div class="captured-item">
-                                <div>
-                                    <div style="font-weight: 700;">${item.title}</div>
-                                    <div style="font-size: 13px; color: var(--subtext);">${item.artist}</div>
-                                </div>
-                                <div style="display: flex; gap: 8px;">
-                                    <button class="action-btn" style="background: var(--accent); color: black; padding: 4px 10px;" onclick="playMonochromeStream('${item.stream_url}', '${item.decryption_key}', '${item.bearer_token || ''}')"><i class="fas fa-play"></i></button>
-                                    <button class="action-btn" style="background: #f59e0b; padding: 4px 10px;" onclick="copyMonoCommandFromData('${cmd.replace(/'/g, "\\'")}')"><i class="fas fa-copy"></i></button>
-                                </div>
+                    const container = document.getElementById('mono-captured-container');
+                    if (!container) return;
+                    if (!captured || captured.length === 0) return;
+
+                    let capturedHtml = '<div style="margin: 20px 0 10px 0; font-weight: 700; font-size: 18px; color: var(--accent);">📦 Captured Streams</div>';
+                    captured.forEach((item) => {
+                        const cmd = `ffplay -decryption_key ${item.decryption_key} -i "${item.stream_url}" -nodisp -autoexit`;
+                        capturedHtml += `
+                        <div class="captured-item">
+                            <div>
+                                <div style="font-weight: 700;">${item.title}</div>
+                                <div style="font-size: 13px; color: var(--subtext);">${item.artist}</div>
                             </div>
-                            `;
-                        });
-                    }
-
-                    contentDiv.innerHTML = `
-                        <div class="fade-in" style="max-width: 700px; margin: 0 auto;">
-                            <h2 style="font-size: 32px; display: flex; align-items: center; gap: 12px;">
-                                <i class="fas fa-cloud-download-alt" style="color: var(--accent);"></i> Monochrome Stream Interceptor
-                            </h2>
-                            <p style="color: var(--subtext); margin-bottom: 24px; font-weight: 500;">
-                                Paste a Monochrome track URL below to fetch and play it, or use the userscript to capture streams automatically.
-                            </p>
-
-                            <div style="display: flex; gap: 12px; margin-bottom: 20px;">
-                                <input type="text" id="mono-url-input" class="mono-url-input" placeholder="e.g. https://monochrome.tf/track/abc123" style="flex: 1; padding: 14px 20px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; font-family: 'Outfit', sans-serif;">
-                                <button class="action-btn" style="background: var(--accent); color: black; padding: 14px 28px; font-weight: 800; border-radius: 30px; box-shadow: 0 5px 15px rgba(29,185,84,0.3);" onclick="fetchMonochromeViaBrowser()">
-                                    <i class="fas fa-search"></i> Fetch
-                                </button>
+                            <div style="display: flex; gap: 8px;">
+                                <button class="action-btn" style="background: var(--accent); color: black; padding: 4px 10px;" onclick="playMonochromeStream('${item.stream_url}', '${item.decryption_key}', '${item.bearer_token || ''}')"><i class="fas fa-play"></i></button>
+                                <button class="action-btn" style="background: #f59e0b; padding: 4px 10px;" onclick="copyMonoCommandFromData('${cmd.replace(/'/g, "\\'")}')"><i class="fas fa-copy"></i></button>
                             </div>
-
-                            <div id="mono-result" style="display: none;">
-                                <div class="mono-result">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-                                        <div>
-                                            <div style="font-weight: 800; font-size: 20px;" id="mono-title">Title</div>
-                                            <div style="color: var(--subtext); font-weight: 500;" id="mono-artist">Artist</div>
-                                        </div>
-                                        <div style="display: flex; gap: 8px;">
-                                            <button class="action-btn" style="background: rgba(255,255,255,0.1); padding: 8px 16px;" onclick="copyMonoCommand()"><i class="fas fa-copy"></i> Copy FFplay</button>
-                                            <button class="action-btn" id="mono-play-btn" style="background: var(--accent); color: black; padding: 8px 16px; display: none;" onclick="playMonochromeStream()"><i class="fas fa-play"></i> Play in App</button>
-                                        </div>
-                                    </div>
-                                    <div style="font-size: 12px; color: var(--subtext); font-weight: 600;">FFplay Command:</div>
-                                    <div class="mono-command" id="mono-command">ffplay -decryption_key ...</div>
-                                </div>
-                            </div>
-
-                            ${capturedHtml}
                         </div>
-                    `;
+                        `;
+                    });
+                    container.innerHTML = capturedHtml;
                 })
-                .catch(() => {
-                    contentDiv.innerHTML = `
-                        <div class="fade-in" style="max-width: 700px; margin: 0 auto;">
-                            <h2 style="font-size: 32px; display: flex; align-items: center; gap: 12px;">
-                                <i class="fas fa-cloud-download-alt" style="color: var(--accent);"></i> Monochrome Stream Interceptor
-                            </h2>
-                            <p style="color: var(--subtext); margin-bottom: 24px; font-weight: 500;">
-                                Paste a Monochrome track URL below to fetch and play it, or use the userscript to capture streams automatically.
-                            </p>
-
-                            <div style="display: flex; gap: 12px; margin-bottom: 20px;">
-                                <input type="text" id="mono-url-input" class="mono-url-input" placeholder="e.g. https://monochrome.tf/track/abc123" style="flex: 1; padding: 14px 20px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; font-family: 'Outfit', sans-serif;">
-                                <button class="action-btn" style="background: var(--accent); color: black; padding: 14px 28px; font-weight: 800; border-radius: 30px; box-shadow: 0 5px 15px rgba(29,185,84,0.3);" onclick="fetchMonochromeViaBrowser()">
-                                    <i class="fas fa-search"></i> Fetch
-                                </button>
-                            </div>
-
-                            <div id="mono-result" style="display: none;">
-                                <div class="mono-result">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-                                        <div>
-                                            <div style="font-weight: 800; font-size: 20px;" id="mono-title">Title</div>
-                                            <div style="color: var(--subtext); font-weight: 500;" id="mono-artist">Artist</div>
-                                        </div>
-                                        <div style="display: flex; gap: 8px;">
-                                            <button class="action-btn" style="background: rgba(255,255,255,0.1); padding: 8px 16px;" onclick="copyMonoCommand()"><i class="fas fa-copy"></i> Copy FFplay</button>
-                                            <button class="action-btn" id="mono-play-btn" style="background: var(--accent); color: black; padding: 8px 16px; display: none;" onclick="playMonochromeStream()"><i class="fas fa-play"></i> Play in App</button>
-                                        </div>
-                                    </div>
-                                    <div style="font-size: 12px; color: var(--subtext); font-weight: 600;">FFplay Command:</div>
-                                    <div class="mono-command" id="mono-command">ffplay -decryption_key ...</div>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                });
+                .catch(() => { /* no captures yet */ });
         }
 
         async function fetchMonochromeViaBrowser() {
@@ -3185,11 +3452,34 @@ HTML_TEMPLATE = r"""
             });
         }
 
+        // Monochrome streams are already routed through <audio>, so the Web Audio
+        // graph (bass boost + visualizer) applies automatically. We just need to
+        // tear down any external player state and re-enable the relevant controls.
         function playMonochromeStream(streamUrl, key, bearerToken) {
             if (!streamUrl || !key) {
                 alert("Missing stream data.");
                 return;
             }
+
+            if (ytMode === 'iframe' && ytPlayer) {
+                try { ytPlayer.pauseVideo(); } catch (e) {}
+            }
+            if (ytMode === 'proxy' && ytPlayer) {
+                try { ytPlayer.pauseVideo(); } catch (e) {}
+            }
+            stopYoutubeControlPolling();
+            stopYoutubeSync();
+            clearYtProxyTimeout();
+            ytMode = 'none';
+            if (spotifyController) spotifyController.pause();
+
+            currentExternalTrack = null;
+            currentSongObj = {
+                filename: 'monochrome:' + (monoData ? monoData.title : 'stream'),
+                title: monoData ? monoData.title : 'Monochrome Stream',
+                artist: monoData ? monoData.artist : 'Monochrome'
+            };
+
             let url = `/api/monochrome/stream?url=${encodeURIComponent(streamUrl)}&key=${encodeURIComponent(key)}`;
             if (bearerToken) {
                 url += `&bearer_token=${encodeURIComponent(bearerToken)}`;
@@ -3199,10 +3489,28 @@ HTML_TEMPLATE = r"""
                 console.error('Playback error:', err);
                 alert('Playback failed. Check the console for details.');
             });
-            document.getElementById('np-title').innerText = monoData ? monoData.title : 'Monochrome Stream';
-            document.getElementById('np-artist').innerText = monoData ? monoData.artist : 'Monochrome';
+
+            // Re-enable EQ + seek bar for this stream
+            bassBar.disabled = false;
+            bassBar.title = 'Bass Boost';
+            progressBar.disabled = false;
+            progressBar.value = 0;
+            timeCurrentEl.innerText = '0:00';
+            timeTotalEl.innerText = '--:--';
+
+            document.getElementById('np-title').innerText = currentSongObj.title;
+            document.getElementById('np-artist').innerHTML =
+                `${escapeHtml(currentSongObj.artist)} <span class="eq-badge"><i class="fas fa-sliders-h" style="font-size:9px;"></i> EQ</span>`;
+            document.getElementById('rp-title').innerText = currentSongObj.title;
+            document.getElementById('rp-artist').innerText = currentSongObj.artist;
             document.getElementById('np-cover').src = '';
             document.getElementById('rp-cover').src = '';
+            document.getElementById('rp-cover-glow').style.backgroundImage = '';
+            document.getElementById('download-btn').style.display = 'none';
+            document.getElementById('like-btn').disabled = false;
+            document.getElementById('dislike-btn').disabled = false;
+            document.getElementById('like-btn').classList.remove('active');
+            document.getElementById('dislike-btn').classList.remove('active');
         }
 
         // ---------------------------------------------------------
@@ -3626,6 +3934,14 @@ def api_data():
     songs = get_all_songs_enriched()
     stats = get_aggregated_stats()
     return jsonify({"songs": songs, "stats": stats})
+
+@app.route('/api/capabilities')
+def api_capabilities():
+    if 'user' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify({
+        "youtube_audio_proxy": (find_ytdlp() is not None) and is_ffmpeg_available()
+    })
 
 @app.route('/api/radio/next')
 def api_radio():
@@ -4097,6 +4413,85 @@ def api_search_spotify():
         return jsonify({"results": [], "available": False})
     return jsonify({"results": results, "available": True})
 
+# ---- YOUTUBE AUDIO PROXY (enables EQ on YouTube) ----
+@app.route('/api/youtube/audio')
+def api_youtube_audio():
+    """Stream YouTube audio through ffmpeg so Web Audio filters can be applied."""
+    if 'user' not in session:
+        return "Unauthorized", 401
+
+    video_id = request.args.get('v', '').strip()
+    if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+        return "Invalid video id", 400
+
+    ytdlp = find_ytdlp()
+    if not ytdlp:
+        return "yt-dlp is not available on this server", 503
+
+    ffmpeg_path = resolve_ffmpeg_path()
+    if not ffmpeg_path:
+        return "FFmpeg not found", 503
+
+    watch_url = f'https://www.youtube.com/watch?v={video_id}'
+
+    # Pre-flight: resolve the direct stream URL. If yt-dlp can't, return 502
+    # immediately so the client can cleanly fall back to raw iframe playback
+    # instead of hanging on an empty MP3 stream.
+    try:
+        probe = subprocess.run(
+            [ytdlp, '-g', '-f', 'bestaudio/best', '--no-playlist',
+             '--no-warnings', watch_url],
+            capture_output=True, text=True, timeout=20
+        )
+    except subprocess.TimeoutExpired:
+        return "yt-dlp probe timed out", 504
+    except Exception as e:
+        return f"yt-dlp probe failed: {e}", 502
+
+    if probe.returncode != 0:
+        err = ''
+        if probe.stderr:
+            err = probe.stderr.strip().split('\n')[-1]
+        print(f"yt-dlp probe failed for {video_id}: {err}")
+        return f"Video unavailable: {err or 'unknown error'}", 502
+
+    stream_url = (probe.stdout or '').strip().split('\n')[0]
+    if not stream_url:
+        return "No stream URL returned by yt-dlp", 502
+
+    # Now spawn ffmpeg reading directly from the resolved googlevideo URL.
+    try:
+        ffmpeg_proc = subprocess.Popen(
+            [ffmpeg_path, '-hide_banner', '-loglevel', 'error',
+             '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                            'AppleWebKit/537.36 (KHTML, like Gecko) '
+                            'Chrome/120.0.0.0 Safari/537.36',
+             '-headers', 'Referer: https://www.youtube.com/\r\n',
+             '-i', stream_url, '-vn',
+             '-acodec', 'libmp3lame', '-b:a', '192k',
+             '-f', 'mp3', 'pipe:1'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
+        )
+    except Exception as e:
+        print(f"ffmpeg spawn failed: {e}")
+        return f"ffmpeg spawn failed: {e}", 500
+
+    def _cleanup():
+        try:
+            ffmpeg_proc.wait(timeout=1)
+        except Exception:
+            try:
+                ffmpeg_proc.kill()
+            except Exception:
+                pass
+
+    resp = Response(ffmpeg_proc.stdout, mimetype='audio/mpeg')
+    # Live-piped mp3 has no fixed length, so seeking is not supported.
+    resp.headers['Accept-Ranges'] = 'none'
+    resp.headers['Cache-Control'] = 'no-store'
+    resp.call_on_close(_cleanup)
+    return resp
+
 # ---- MONOCHROME API ROUTES ----
 @app.route('/api/monochrome/fetch', methods=['POST'])
 def api_monochrome_fetch():
@@ -4195,14 +4590,7 @@ def api_monochrome_stream():
     if not stream_url or not key:
         return "Missing parameters", 400
 
-    app_dir = os.path.dirname(os.path.abspath(__file__))
-    local_ffmpeg = os.path.join(app_dir, 'ffmpeg')
-    ffmpeg_path = None
-    if os.path.exists(local_ffmpeg) and os.access(local_ffmpeg, os.X_OK):
-        ffmpeg_path = local_ffmpeg
-    else:
-        ffmpeg_path = shutil.which('ffmpeg')
-
+    ffmpeg_path = resolve_ffmpeg_path()
     if not ffmpeg_path:
         return "FFmpeg not found", 503
 
@@ -4319,4 +4707,8 @@ def serve_profiles(filename):
 # ---------------------------------------------------------
 if __name__ == '__main__':
     print(f"🎵 App running on port {PORT}! Open http://localhost:{PORT}")
+    if find_ytdlp():
+        print(f"✅ yt-dlp found: EQ on YouTube enabled (default)")
+    else:
+        print(f"ℹ️  yt-dlp not found — YouTube EQ disabled (pip install yt-dlp to enable)")
     app.run(host='0.0.0.0', port=PORT)
